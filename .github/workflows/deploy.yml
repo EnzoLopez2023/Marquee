@@ -236,7 +236,7 @@ jobs:
           test "$PROMOTED_DIGEST" = "$DIGEST"
 
       - name: Roll back failed or cancelled deployment
-        if: ${{ (failure() || cancelled()) && steps.deploy.outcome == 'success' }}
+        if: ${{ (failure() || cancelled()) && steps.current.outcome == 'success' && steps.deploy.outcome != 'skipped' }}
         env:
           RESOURCE_GROUP: ${{ vars.RESOURCE_GROUP }}
           WEBAPP_NAME: ${{ vars.WEBAPP_NAME }}
