@@ -1,0 +1,76 @@
+{
+  "contract": "marquee.legacy-source-approval.v1",
+  "status": "approved",
+  "evidence": {
+    "purpose": "f0-production-rehearsal",
+    "source": {
+      "repository": "EnzoLopez2023/Hearth",
+      "version": "2.13.2",
+      "build": 172,
+      "commit": "f0b05fc1dbf53e8aa26c215d8e858894a2793871",
+      "tree": "62cbd35861c511f7c17187c875d19ee6e353b80d",
+      "imageDigest": "sha256:dc4df7e0f966be5b0608e71643d316cc5eba7590b8e56cec482583ab69443140"
+    },
+    "database": {
+      "bytes": 950947840,
+      "sha256": "dc9fb47d269b339a3dcae37279dc3116f37a0635728a2d2b2ac2c511811a5807",
+      "schemaObjectCount": 246,
+      "quickCheck": "ok",
+      "integrityCheck": "ok",
+      "foreignKeyViolations": 0
+    },
+    "ownedTables": {
+      "plex_action_log": {
+        "rowCount": 272,
+        "canonicalSha256": "fe2ec23d3154cd9da20b259159555d95b54c1c800aa81e2e3e10b8d923ff46b5"
+      },
+      "sonarr_latest": {
+        "rowCount": 1,
+        "canonicalSha256": "b9605828e3e10a9062d56872a45e1e74f7bd4a5ceb9690f656e97f06808cab71"
+      },
+      "sonarr_metric_samples": {
+        "rowCount": 1234,
+        "canonicalSha256": "3fcb4f1da201ac97edbf59b7e41812c162b1b0680c832a232de3e58f375cacde"
+      },
+      "sonarr_summary": {
+        "rowCount": 1,
+        "canonicalSha256": "1196d729ac5d17a7e4e94358bd65c62384c174954bafb6d3c25ed0e996c61509"
+      }
+    },
+    "product": {
+      "tableCount": 4,
+      "rowCount": 1508,
+      "canonicalSha256": "66e9eb734289466045fd7038af072b29b1716553dc52f9a947cbd84d2bced8fe"
+    },
+    "transforms": {
+      "sonarr_agent_logs": {
+        "rowCount": 8812,
+        "canonicalSha256": "48f79b4057d7f286f0693c5d66debe8d26b14cbd6132ec2533df112596230ae0"
+      },
+      "sonarr_ingest_receipts": {
+        "rowCount": 7692,
+        "canonicalSha256": "ae37bd260014c29d6188728c8f9706f9052d033b6ecbed990d1002a524e5f017"
+      },
+      "app_identities": {
+        "rowCount": 3,
+        "canonicalSha256": "1f5a1a34ed7c092d93664a010a1a545164879d038e3b80804ad85bab59b55e95"
+      },
+      "app_feature_permissions": {
+        "rowCount": 3,
+        "canonicalSha256": "df4c3ac0b297aade85f2d9c6f2c0610480881214868581141d28a8e6f67ff7df"
+      },
+      "app_role_grants": {
+        "rowCount": 0,
+        "canonicalSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "app_audit_log": {
+        "rowCount": 101,
+        "canonicalSha256": "9393d0437a067b85c755968b1b86186d14fe25cbb9ec5d61fa62bdb9bb9ad5d6"
+      }
+    }
+  },
+  "approval": {
+    "method": "repository-pinned",
+    "payloadSha256": "48ee350d6258b609e8e2ade953d3bdd8969cf4b107611fbd34aa5de02dba3569"
+  }
+}
