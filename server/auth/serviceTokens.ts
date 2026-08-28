@@ -13,11 +13,19 @@ export function requireWorkload(
   permission: 'read' | 'write',
 ) {
   return async (req: Request, res: Response, next: NextFunction) => {
-    const token = bearer(req)
-    if (!token) return res.status(401).json({ error: { code: 'WORKLOAD_TOKEN_REQUIRED' } })
     const clientId = consumer === 'watchtower'
       ? config.entra.workloads.watchtower.clientId
       : config.entra.workloads.prism.clientId
+    if (!clientId) {
+      return res.status(503).json({
+        error: {
+          code: 'WORKLOAD_IDENTITY_NOT_CONFIGURED',
+          dependency: consumer,
+        },
+      })
+    }
+    const token = bearer(req)
+    if (!token) return res.status(401).json({ error: { code: 'WORKLOAD_TOKEN_REQUIRED' } })
     const role = consumer === 'watchtower'
       ? config.entra.workloads.watchtower.role
       : permission === 'write'

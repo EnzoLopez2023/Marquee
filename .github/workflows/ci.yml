@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - name: Strict typecheck
+        run: npm run typecheck
+
+      - name: ESLint
+        run: npm run lint
+
+      - name: All tests
+        run: npm test
+
+      - name: Client production build
+        run: npm run build:client
+
+      - name: Server production build
+        run: npm run build:server
+
+      - name: SQLite architecture invariants
+        run: npm run check:architecture
+
+      - name: Production dependency audit
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Complete dependency audit
+        run: npm audit --audit-level=high
+
+  docker:
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Build Linux image
+        env:
+          IMAGE: marquee:ci-${{ github.sha }}
+          BUILD_ID: ci.${{ github.run_id }}.${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p "require('./package.json').version")+ci.${GITHUB_RUN_NUMBER}"
+          BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          docker build \
+            --build-arg "MARQUEE_BUILD_VERSION=$VERSION" \
+            --build-arg "MARQUEE_BUILD_COMMIT=$GITHUB_SHA" \
+            --build-arg "MARQUEE_BUILD_ID=$BUILD_ID" \
+            --build-arg "MARQUEE_BUILD_TIME=$BUILD_TIME" \
+            --tag "$IMAGE" .
+
+      - name: Smoke production container
+        env:
+          IMAGE: marquee:ci-${{ github.sha }}
+          BUILD_ID: ci.${{ github.run_id }}.${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          TENANT_ID="$(node -e "console.log(crypto.randomUUID())")"
+          CLIENT_ID="$(node -e "console.log(crypto.randomUUID())")"
+          ADMIN_OID="$(node -e "console.log(crypto.randomUUID())")"
+          cleanup() {
+            docker logs marquee-smoke || true
+            docker rm -f marquee-smoke >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          docker run --detach --name marquee-smoke \
+            --env CI=true \
+            --env MARQUEE_EPHEMERAL_SMOKE=true \
+            --env DB_PATH=/tmp/marquee-smoke/marquee.db \
+            --env MARQUEE_ARTIFACT_ROOT=/tmp/marquee-smoke/artifacts \
+            --env AZURE_AD_TENANT_ID="$TENANT_ID" \
+            --env AZURE_AD_CLIENT_ID="$CLIENT_ID" \
+            --env AZURE_AD_AUDIENCE="api://$CLIENT_ID" \
+            --env ADMIN_OID="$ADMIN_OID" \
+            "$IMAGE"
+          for attempt in $(seq 1 30); do
+            if docker exec marquee-smoke node scripts/container-smoke.mjs; then
+              exit 0
+            fi
+            sleep 2
+          done
+          exit 1

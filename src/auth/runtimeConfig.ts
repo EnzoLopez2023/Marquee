@@ -11,23 +11,37 @@ export function validateRuntimeConfig(value: unknown): MarqueeRuntimeConfig {
     throw new Error('Marquee runtime configuration is missing');
   }
   const candidate = value as Partial<MarqueeRuntimeConfig>;
-  if (!GUID.test(candidate.entraTenantId ?? '') || !GUID.test(candidate.entraClientId ?? '')) {
+  const tenantId = candidate.entraTenantId;
+  const clientId = candidate.entraClientId;
+  const apiScope = candidate.entraApiScope;
+  if (
+    typeof tenantId !== 'string'
+    || typeof clientId !== 'string'
+    || !GUID.test(tenantId)
+    || !GUID.test(clientId)
+  ) {
     throw new Error('Marquee runtime Entra tenant/client configuration is invalid');
   }
-  const expectedScope = `api://${candidate.entraClientId}/Marquee.User`;
-  if (candidate.entraApiScope !== expectedScope) {
+  const expectedScope = `api://${clientId}/Marquee.User`;
+  if (apiScope !== expectedScope) {
     throw new Error('Marquee runtime Entra scope is invalid');
   }
-  return candidate as MarqueeRuntimeConfig;
+  return {
+    entraTenantId: tenantId,
+    entraClientId: clientId,
+    entraApiScope: apiScope,
+  };
 }
 
-declare global {
-  interface Window {
-    __MARQUEE_RUNTIME_CONFIG__?: MarqueeRuntimeConfig;
+export async function fetchBrowserRuntimeConfig(
+  fetcher: typeof fetch = fetch,
+): Promise<MarqueeRuntimeConfig> {
+  const response = await fetcher('/api/config', {
+    headers: { Accept: 'application/json' },
+    cache: 'no-store',
+  });
+  if (!response.ok) {
+    throw new Error(`Marquee runtime configuration is unavailable (${response.status})`);
   }
-}
-
-export function readBrowserRuntimeConfig() {
-  if (typeof window === 'undefined') throw new Error('Browser runtime configuration is unavailable');
-  return validateRuntimeConfig(window.__MARQUEE_RUNTIME_CONFIG__);
+  return validateRuntimeConfig(await response.json());
 }

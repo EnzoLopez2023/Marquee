@@ -1,0 +1,245 @@
+name: Deploy production
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  id-token: write
+  contents: read
+  attestations: write
+
+env:
+  IMAGE_NAME: marquee
+
+jobs:
+  validate:
+    uses: ./.github/workflows/ci.yml
+
+  build-and-push:
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: production
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+      image: ${{ steps.meta.outputs.image }}
+      version: ${{ steps.meta.outputs.version }}
+      build_id: ${{ steps.meta.outputs.build_id }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Require deployment variables
+        env:
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          ACR_NAME: ${{ vars.ACR_NAME }}
+          WEBAPP_NAME: ${{ vars.WEBAPP_NAME }}
+          RESOURCE_GROUP: ${{ vars.RESOURCE_GROUP }}
+        run: |
+          set -euo pipefail
+          test -n "$AZURE_CLIENT_ID" || { echo "::error::AZURE_CLIENT_ID is required"; exit 1; }
+          test -n "$AZURE_TENANT_ID" || { echo "::error::AZURE_TENANT_ID is required"; exit 1; }
+          test -n "$AZURE_SUBSCRIPTION_ID" || { echo "::error::AZURE_SUBSCRIPTION_ID is required"; exit 1; }
+          test -n "$ACR_NAME" || { echo "::error::ACR_NAME is required"; exit 1; }
+          test -n "$WEBAPP_NAME" || { echo "::error::WEBAPP_NAME is required"; exit 1; }
+          test -n "$RESOURCE_GROUP" || { echo "::error::RESOURCE_GROUP is required"; exit 1; }
+
+      - name: Azure OIDC login
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: ACR login
+        run: az acr login --name "${{ vars.ACR_NAME }}"
+
+      - name: Compute immutable image metadata
+        id: meta
+        env:
+          ACR_NAME: ${{ vars.ACR_NAME }}
+        run: |
+          set -euo pipefail
+          PACKAGE_VERSION="$(node -p "require('./package.json').version")"
+          VERSION="${PACKAGE_VERSION%%+*}+run.${GITHUB_RUN_NUMBER}"
+          BUILD_ID="${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}"
+          TAG="run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_SHA::12}"
+          echo "image=${ACR_NAME}.azurecr.io/${IMAGE_NAME}:${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "build_id=$BUILD_ID" >> "$GITHUB_OUTPUT"
+          echo "build_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+
+      - name: Build and push run-unique image
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.image }}
+          provenance: mode=max
+          build-args: |
+            MARQUEE_BUILD_VERSION=${{ steps.meta.outputs.version }}
+            MARQUEE_BUILD_COMMIT=${{ github.sha }}
+            MARQUEE_BUILD_ID=${{ steps.meta.outputs.build_id }}
+            MARQUEE_BUILD_TIME=${{ steps.meta.outputs.build_time }}
+
+      - name: Verify exact ACR digest
+        env:
+          ACR_NAME: ${{ vars.ACR_NAME }}
+          IMAGE: ${{ steps.meta.outputs.image }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          REMOTE_DIGEST="$(az acr repository show \
+            --name "$ACR_NAME" \
+            --image "${IMAGE#*.azurecr.io/}" \
+            --query digest -o tsv)"
+          test "$REMOTE_DIGEST" = "$DIGEST"
+
+      - name: Generate SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610
+        with:
+          image: ${{ steps.meta.outputs.image }}@${{ steps.build.outputs.digest }}
+          format: spdx-json
+          output-file: marquee-sbom.spdx.json
+
+      - name: Upload SBOM
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: marquee-sbom-${{ github.run_id }}-${{ github.run_attempt }}
+          path: marquee-sbom.spdx.json
+          if-no-files-found: error
+
+      - name: Scan image for high and critical vulnerabilities
+        uses: aquasecurity/trivy-action@5ba2889ada762081db2c4f32a729827dce632c7b
+        with:
+          image-ref: ${{ steps.meta.outputs.image }}@${{ steps.build.outputs.digest }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@f713795cb21599bc4e5c4b58cbad1da852d7eeb9
+
+      - name: Sign exact image digest
+        env:
+          IMAGE: ${{ steps.meta.outputs.image }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: cosign sign --yes "${IMAGE%@*}@${DIGEST}"
+
+      - name: Attest exact image provenance
+        uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661
+        with:
+          subject-name: ${{ vars.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 20
+    concurrency:
+      group: marquee-production
+      cancel-in-progress: false
+    steps:
+      - name: Azure OIDC login
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Capture rollback image
+        id: current
+        env:
+          RESOURCE_GROUP: ${{ vars.RESOURCE_GROUP }}
+          WEBAPP_NAME: ${{ vars.WEBAPP_NAME }}
+        run: |
+          set -euo pipefail
+          CURRENT="$(az webapp config container show \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$WEBAPP_NAME" \
+            --query "[?name=='DOCKER_CUSTOM_IMAGE_NAME'].value | [0]" -o tsv)"
+          [[ "$CURRENT" =~ @sha256:[0-9a-f]{64}$ ]] \
+            || { echo "::error::Current production image is not digest-pinned; refusing an unrollbackable deploy"; exit 1; }
+          echo "image=$CURRENT" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy exact digest
+        id: deploy
+        env:
+          RESOURCE_GROUP: ${{ vars.RESOURCE_GROUP }}
+          WEBAPP_NAME: ${{ vars.WEBAPP_NAME }}
+          IMAGE: ${{ vars.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}@${{ needs.build-and-push.outputs.digest }}
+        run: |
+          set -euo pipefail
+          az webapp config container set \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$WEBAPP_NAME" \
+            --container-image-name "$IMAGE" \
+            --container-registry-url "https://${{ vars.ACR_NAME }}.azurecr.io"
+          az webapp restart --resource-group "$RESOURCE_GROUP" --name "$WEBAPP_NAME"
+
+      - name: Probe deployed identity and health agreement
+        env:
+          SITE_URL: https://${{ vars.WEBAPP_NAME }}.azurewebsites.net
+          EXPECTED_COMMIT: ${{ github.sha }}
+          EXPECTED_VERSION: ${{ needs.build-and-push.outputs.version }}
+          EXPECTED_BUILD_ID: ${{ needs.build-and-push.outputs.build_id }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 40); do
+            if curl --fail --silent --show-error "$SITE_URL/version.json" -o version-file.json \
+              && curl --fail --silent --show-error "$SITE_URL/api/version" -o version-api.json \
+              && curl --fail --silent --show-error "$SITE_URL/api/live" -o live.json \
+              && curl --fail --silent --show-error "$SITE_URL/api/ready" -o ready.json \
+              && curl --fail --silent --show-error "$SITE_URL/api/config" -o config.json \
+              && cmp -s version-file.json version-api.json \
+              && jq -e --arg commit "$EXPECTED_COMMIT" --arg version "$EXPECTED_VERSION" --arg build "$EXPECTED_BUILD_ID" \
+                '.app == "marquee" and .environment == "production" and .commit == $commit and .version == $version and .buildId == $build' version-api.json \
+              && jq -e --arg commit "$EXPECTED_COMMIT" --arg build "$EXPECTED_BUILD_ID" \
+                '.status == "live" and .commit == $commit and .buildId == $build' live.json \
+              && jq -e --arg commit "$EXPECTED_COMMIT" --arg build "$EXPECTED_BUILD_ID" \
+                '.status == "ready" and .success == true and .commit == $commit and .buildId == $build and .database.journalMode == "delete"' ready.json \
+              && jq -e '
+                (.entraTenantId | test("^[0-9a-f-]{36}$"))
+                and (.entraClientId | test("^[0-9a-f-]{36}$"))
+                and .entraApiScope == ("api://" + .entraClientId + "/Marquee.User")
+                and (keys | sort) == ["entraApiScope","entraClientId","entraTenantId"]
+              ' config.json; then
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "::error::Deployed Marquee did not reach identity/health agreement"
+          exit 1
+
+      - name: Promote verified digest
+        env:
+          IMAGE: ${{ vars.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}
+          DIGEST: ${{ needs.build-and-push.outputs.digest }}
+        run: |
+          set -euo pipefail
+          az acr login --name "${{ vars.ACR_NAME }}"
+          docker pull "$IMAGE@$DIGEST"
+          docker tag "$IMAGE@$DIGEST" "$IMAGE:production"
+          docker push "$IMAGE:production"
+
+      - name: Roll back failed or cancelled deployment
+        if: ${{ (failure() || cancelled()) && steps.deploy.outcome == 'success' }}
+        env:
+          RESOURCE_GROUP: ${{ vars.RESOURCE_GROUP }}
+          WEBAPP_NAME: ${{ vars.WEBAPP_NAME }}
+          PREVIOUS_IMAGE: ${{ steps.current.outputs.image }}
+        run: |
+          set -euo pipefail
+          az webapp config container set \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$WEBAPP_NAME" \
+            --container-image-name "$PREVIOUS_IMAGE" \
+            --container-registry-url "https://${{ vars.ACR_NAME }}.azurecr.io"
+          az webapp restart --resource-group "$RESOURCE_GROUP" --name "$WEBAPP_NAME"

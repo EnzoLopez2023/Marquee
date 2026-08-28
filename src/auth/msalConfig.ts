@@ -1,20 +1,26 @@
 import type { Configuration } from '@azure/msal-browser';
-import { readBrowserRuntimeConfig } from './runtimeConfig.js';
+import type { MarqueeRuntimeConfig } from './runtimeConfig.js';
 
-const runtimeConfig = readBrowserRuntimeConfig();
-const tenantId = runtimeConfig.entraTenantId;
-const clientId = runtimeConfig.entraClientId;
+let activeLoginRequest: { scopes: string[] } | null = null;
 
-export const msalConfig: Configuration = {
-  auth: {
-    clientId: clientId ?? '',
-    authority: `https://login.microsoftonline.com/${tenantId ?? ''}`,
-    redirectUri: window.location.origin,
-    postLogoutRedirectUri: window.location.origin,
-  },
-  cache: { cacheLocation: 'localStorage', storeAuthStateInCookie: false },
-};
+export function createMsalSettings(runtimeConfig: MarqueeRuntimeConfig) {
+  const msalConfig: Configuration = {
+    auth: {
+      clientId: runtimeConfig.entraClientId,
+      authority: `https://login.microsoftonline.com/${runtimeConfig.entraTenantId}`,
+      redirectUri: window.location.origin,
+      postLogoutRedirectUri: window.location.origin,
+    },
+    cache: { cacheLocation: 'localStorage', storeAuthStateInCookie: false },
+  };
+  activeLoginRequest = { scopes: [runtimeConfig.entraApiScope] };
+  return {
+    msalConfig,
+    loginRequest: activeLoginRequest,
+  };
+}
 
-export const loginRequest = {
-  scopes: [runtimeConfig.entraApiScope],
-};
+export function getLoginRequest() {
+  if (!activeLoginRequest) throw new Error('MSAL runtime configuration is not initialized');
+  return activeLoginRequest;
+}

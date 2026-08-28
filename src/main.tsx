@@ -5,12 +5,14 @@ import { PublicClientApplication } from '@azure/msal-browser';
 import { BrowserRouter } from 'react-router-dom';
 import App from './App';
 import AuthGuard from './auth/AuthGuard';
-import { msalConfig } from './auth/msalConfig';
-import { loginRequest } from './auth/msalConfig';
+import { createMsalSettings } from './auth/msalConfig';
+import { fetchBrowserRuntimeConfig } from './auth/runtimeConfig';
 import { ThemeModeProvider } from './context/ThemeContext';
 import { UserPermissionsProvider } from './context/UserPermissionsContext';
 import { setAccessTokenProvider } from './services/apiClient';
 
+const runtimeConfig = await fetchBrowserRuntimeConfig();
+const { msalConfig, loginRequest } = createMsalSettings(runtimeConfig);
 const msal = new PublicClientApplication(msalConfig);
 await msal.initialize();
 setAccessTokenProvider(async () => {

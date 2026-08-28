@@ -16,6 +16,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.app.json && tsc --noEmit -p tsconfig.server.json",
     "lint": "eslint .",
     "test": "vitest run",
+    "check:architecture": "node scripts/check-architecture.mjs",
     "import:legacy": "tsx scripts/legacy-import.mts",
     "reconcile": "tsx scripts/reconcile.mts",
     "recovery": "tsx scripts/recovery.mts"

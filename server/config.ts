@@ -1,3 +1,10 @@
+import {
+  accessSync,
+  constants,
+  existsSync,
+  mkdirSync,
+  realpathSync,
+} from 'node:fs'
 import path from 'node:path'
 import { canonicalPlexId } from './domain/media/plexId.js'
 import {
@@ -10,95 +17,156 @@ const integer = (value: string | undefined, fallback: number, min: number, max: 
   return Number.isInteger(parsed) && parsed >= min && parsed <= max ? parsed : fallback
 }
 
-const production = process.env.NODE_ENV === 'production'
 const guid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const guidEnv = (value: string | undefined) => (value || '').trim().toLowerCase()
-const audienceEnv = (value: string | undefined, fallback: string) => {
-  const configured = (value || fallback).trim()
-  return guid.test(configured) ? configured.toLowerCase() : configured
+
+export function resolveTenantId(env: NodeJS.ProcessEnv) {
+  const canonical = guidEnv(env.AZURE_AD_TENANT_ID)
+  const legacy = guidEnv(env.AAD_TENANT_ID)
+  if (canonical && legacy && canonical !== legacy) {
+    throw new Error('AZURE_AD_TENANT_ID and legacy AAD_TENANT_ID conflict')
+  }
+  return canonical || legacy
 }
 
-export const config = Object.freeze({
-  production,
-  port: integer(process.env.PORT, 3001, 1, 65_535),
-  databasePath: production
-    ? '/home/data/marquee.db'
-    : process.env.DB_PATH || path.resolve('marquee.db'),
-  sqliteBusyTimeoutMs: integer(process.env.SQLITE_BUSY_TIMEOUT_MS, 5_000, 250, 15_000),
-  entra: {
-    tenantId: guidEnv(process.env.AZURE_AD_TENANT_ID),
-    clientId: guidEnv(process.env.AZURE_AD_CLIENT_ID),
-    audience: audienceEnv(process.env.AZURE_AD_AUDIENCE, guidEnv(process.env.AZURE_AD_CLIENT_ID)),
-    adminOid: guidEnv(process.env.ADMIN_OID),
-    bootstrapAdminOid: guidEnv(process.env.MARQUEE_BOOTSTRAP_ADMIN_OID),
-    userScope: 'Marquee.User',
-    workloads: {
-      watchtower: {
-        clientId: guidEnv(process.env.WATCHTOWER_CLIENT_ID),
-        role: process.env.WATCHTOWER_APP_ROLE || 'Marquee.Watchtower.MediaHealth.Read',
-      },
-      prism: {
-        clientId: guidEnv(process.env.PRISM_CLIENT_ID),
-        readRole: process.env.PRISM_READ_APP_ROLE || 'Marquee.Prism.Media.Read',
-        writeRole: process.env.PRISM_WRITE_APP_ROLE || 'Marquee.Prism.Media.Write',
+export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
+  const production = env.NODE_ENV === 'production'
+  const clientId = guidEnv(env.AZURE_AD_CLIENT_ID)
+  return Object.freeze({
+    production,
+    port: integer(env.PORT, 3001, 1, 65_535),
+    host: production ? '0.0.0.0' : (env.HOST || '127.0.0.1'),
+    databasePath: env.DB_PATH || (production ? '/home/data/marquee.db' : path.resolve('marquee.db')),
+    artifactRoot: env.MARQUEE_ARTIFACT_ROOT
+      || (production ? '/home/data/marquee-artifacts' : path.resolve('marquee-artifacts')),
+    sqliteBusyTimeoutMs: integer(env.SQLITE_BUSY_TIMEOUT_MS, 5_000, 250, 15_000),
+    entra: {
+      tenantId: resolveTenantId(env),
+      clientId,
+      audience: (env.AZURE_AD_AUDIENCE || `api://${clientId}`).trim(),
+      adminOid: guidEnv(env.ADMIN_OID),
+      bootstrapAdminOid: guidEnv(env.MARQUEE_BOOTSTRAP_ADMIN_OID),
+      userScope: 'Marquee.User',
+      workloads: {
+        watchtower: {
+          clientId: guidEnv(env.WATCHTOWER_CLIENT_ID),
+          role: env.WATCHTOWER_APP_ROLE || 'Marquee.Watchtower.MediaHealth.Read',
+        },
+        prism: {
+          clientId: guidEnv(env.PRISM_CLIENT_ID),
+          readRole: env.PRISM_READ_APP_ROLE || 'Marquee.Prism.Media.Read',
+          writeRole: env.PRISM_WRITE_APP_ROLE || 'Marquee.Prism.Media.Write',
+        },
       },
     },
-  },
-  plex: {
-    baseUrl: (process.env.PLEX_BASE_URL || 'https://localhost:32400').replace(/\/$/, ''),
-    token: process.env.PLEX_TOKEN || '',
-    librarySection: process.env.PLEX_LIBRARY_SECTION || '9',
-    tls: {
-      insecure: process.env.PLEX_TLS_INSECURE === 'true',
-      caFile: process.env.PLEX_TLS_CA_FILE || '',
-      certificateSha256: (process.env.PLEX_TLS_CERT_SHA256 || '')
-        .replaceAll(':', '')
-        .toLowerCase(),
+    plex: {
+      baseUrl: (env.PLEX_BASE_URL || 'https://localhost:32400').replace(/\/$/, ''),
+      token: env.PLEX_TOKEN || '',
+      librarySection: env.PLEX_LIBRARY_SECTION || '9',
+      tls: {
+        insecure: env.PLEX_TLS_INSECURE === 'true',
+        caFile: env.PLEX_TLS_CA_FILE || '',
+        certificateSha256: (env.PLEX_TLS_CERT_SHA256 || '')
+          .replaceAll(':', '')
+          .toLowerCase(),
+      },
     },
-  },
-  tautulli: {
-    url: (process.env.TAUTULLI_URL || 'http://localhost:8181').replace(/\/$/, ''),
-    apiKey: process.env.TAUTULLI_API_KEY || '',
-  },
-  omdbApiKey: process.env.OMDB_API_KEY || '',
-  anthropicApiKey: process.env.ANTHROPIC_API_KEY || '',
-  playlistModel: {
-    endpoint: (process.env.VIBE_OPENAI_ENDPOINT || '').replace(/\/$/, ''),
-    apiKey: process.env.VIBE_OPENAI_API_KEY || '',
-    deployment: process.env.VIBE_OPENAI_DEPLOYMENT || 'gpt-5.4',
-  },
-  sonarrIngestToken: process.env.SONARR_INGEST_TOKEN || '',
-})
+    tautulli: {
+      url: (env.TAUTULLI_URL || 'http://localhost:8181').replace(/\/$/, ''),
+      apiKey: env.TAUTULLI_API_KEY || '',
+    },
+    omdbApiKey: env.OMDB_API_KEY || '',
+    anthropicApiKey: env.ANTHROPIC_API_KEY || '',
+    playlistModel: {
+      endpoint: (env.VIBE_OPENAI_ENDPOINT || '').replace(/\/$/, ''),
+      apiKey: env.VIBE_OPENAI_API_KEY || '',
+      deployment: env.VIBE_OPENAI_DEPLOYMENT || 'gpt-5.4',
+    },
+    sonarrIngestToken: env.SONARR_INGEST_TOKEN || '',
+  })
+}
 
-export function validateConfig(): void {
+export type MarqueeConfig = ReturnType<typeof loadConfig>
+export const config = loadConfig()
+
+export function validateConfig(
+  candidate: MarqueeConfig = config,
+  env: NodeJS.ProcessEnv = process.env,
+): void {
   const missing = [
-    ['AZURE_AD_TENANT_ID', config.entra.tenantId],
-    ['AZURE_AD_CLIENT_ID', config.entra.clientId],
-    ['AZURE_AD_AUDIENCE', config.entra.audience],
-    ['WATCHTOWER_CLIENT_ID', config.entra.workloads.watchtower.clientId],
-    ['PRISM_CLIENT_ID', config.entra.workloads.prism.clientId],
+    ['AZURE_AD_TENANT_ID', candidate.entra.tenantId],
+    ['AZURE_AD_CLIENT_ID', candidate.entra.clientId],
+    ['AZURE_AD_AUDIENCE', candidate.entra.audience],
   ].filter(([, value]) => !value).map(([name]) => name)
-  if (config.production && missing.length) {
+  if (candidate.production && missing.length) {
     throw new Error(`Missing required production configuration: ${missing.join(', ')}`)
   }
-  if (!canonicalPlexId(config.plex.librarySection)) {
+  if (!canonicalPlexId(candidate.plex.librarySection)) {
     throw new Error('PLEX_LIBRARY_SECTION must be a canonical positive integer')
   }
-  assertPlexTlsConfiguration(config.plex.baseUrl, config.plex.tls)
-  if (config.production) {
+  assertPlexTlsConfiguration(candidate.plex.baseUrl, candidate.plex.tls)
+  for (const [name, value] of [
+    ['WATCHTOWER_CLIENT_ID', candidate.entra.workloads.watchtower.clientId],
+    ['PRISM_CLIENT_ID', candidate.entra.workloads.prism.clientId],
+  ]) {
+    if (value && !guid.test(value)) throw new Error(`${name} must be a GUID when configured`)
+  }
+  if (candidate.production) {
     for (const [name, value] of [
-      ['AZURE_AD_TENANT_ID', config.entra.tenantId],
-      ['AZURE_AD_CLIENT_ID', config.entra.clientId],
-      ['WATCHTOWER_CLIENT_ID', config.entra.workloads.watchtower.clientId],
-      ['PRISM_CLIENT_ID', config.entra.workloads.prism.clientId],
+      ['AZURE_AD_TENANT_ID', candidate.entra.tenantId],
+      ['AZURE_AD_CLIENT_ID', candidate.entra.clientId],
     ]) {
       if (!value || !guid.test(value)) throw new Error(`${name} must be a GUID`)
     }
+    const expectedAudience = `api://${candidate.entra.clientId}`
+    if (candidate.entra.audience !== expectedAudience) {
+      throw new Error(`AZURE_AD_AUDIENCE must be ${expectedAudience}`)
+    }
     resolveAdminOid(
-      config.entra.adminOid,
-      config.entra.bootstrapAdminOid,
+      candidate.entra.adminOid,
+      candidate.entra.bootstrapAdminOid,
       true,
     )
+    assertRuntimeStorage(candidate, env)
+  }
+}
+
+export function assertRuntimeStorage(
+  candidate: Pick<MarqueeConfig, 'databasePath' | 'artifactRoot'>,
+  env: NodeJS.ProcessEnv = process.env,
+) {
+  const ephemeralSmoke = env.CI === 'true' && env.MARQUEE_EPHEMERAL_SMOKE === 'true'
+  const authority = ephemeralSmoke ? '/tmp' : '/home/data'
+  for (const [name, target] of [
+    ['DB_PATH', candidate.databasePath],
+    ['MARQUEE_ARTIFACT_ROOT', candidate.artifactRoot],
+  ] satisfies Array<readonly [string, string]>) {
+    if (!path.isAbsolute(target)) throw new Error(`${name} must be an absolute path in production`)
+    const directory = name === 'DB_PATH' ? path.dirname(target) : target
+    const normalizedAuthority = path.resolve(authority)
+    const normalizedDirectory = path.resolve(directory)
+    if (
+      normalizedDirectory !== normalizedAuthority
+      && !normalizedDirectory.startsWith(`${normalizedAuthority}${path.sep}`)
+    ) {
+      throw new Error(`${name} must remain under ${authority}`)
+    }
+    mkdirSync(directory, { recursive: true })
+    const resolvedAuthority = realpathSync(authority)
+    const resolvedDirectory = realpathSync(directory)
+    if (
+      resolvedDirectory !== resolvedAuthority
+      && !resolvedDirectory.startsWith(`${resolvedAuthority}${path.sep}`)
+    ) {
+      throw new Error(`${name} must remain under ${authority}`)
+    }
+    accessSync(resolvedDirectory, constants.W_OK)
+    if (name === 'DB_PATH' && existsSync(target)) {
+      const resolvedTarget = realpathSync(target)
+      if (!resolvedTarget.startsWith(`${resolvedAuthority}${path.sep}`)) {
+        throw new Error(`${name} must remain under ${authority}`)
+      }
+    }
   }
 }
 
@@ -143,10 +211,13 @@ export function publicConfigSummary() {
 
 }
 
-export function frontendRuntimeConfig() {
+export function frontendRuntimeConfig(candidate: MarqueeConfig = config) {
+  if (!guid.test(candidate.entra.tenantId) || !guid.test(candidate.entra.clientId)) {
+    throw new Error('Marquee user login is not configured')
+  }
   return {
-    entraTenantId: config.entra.tenantId,
-    entraClientId: config.entra.clientId,
-    entraApiScope: `api://${config.entra.clientId}/${config.entra.userScope}`,
+    entraTenantId: candidate.entra.tenantId,
+    entraClientId: candidate.entra.clientId,
+    entraApiScope: `api://${candidate.entra.clientId}/${candidate.entra.userScope}`,
   }
 }

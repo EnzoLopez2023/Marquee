@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useMsal } from '@azure/msal-react';
-import { loginRequest } from '../auth/msalConfig.js';
+import { getLoginRequest } from '../auth/msalConfig.js';
 import { featureIsReadOnly } from '../auth/permissions.js';
 
 type Role = 'viewer' | 'duplicate_delete' | 'admin';
@@ -33,7 +33,7 @@ export function UserPermissionsProvider({ children }: { children: ReactNode }) {
       const account = instance.getActiveAccount() ?? instance.getAllAccounts()[0];
       if (!account) return;
       try {
-        const token = await instance.acquireTokenSilent({ ...loginRequest, account });
+        const token = await instance.acquireTokenSilent({ ...getLoginRequest(), account });
         const response = await fetch('/api/me', {
           headers: { Authorization: `Bearer ${token.accessToken}` },
         });
