@@ -31,8 +31,11 @@ credentials.*
 *-shm
 backups
 artifacts
-recovery
+recovery-data
+recovery-artifacts
 data
+!lib/recovery/**
+!scripts/recovery.mts
 scripts/sonarr-agent/sonarr-agent.config.json*
 scripts/sonarr-agent/*.ndjson
 scripts/sonarr-agent/*.dead-letter
