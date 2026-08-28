@@ -25,11 +25,13 @@ configure these outside this repository:
    persistent storage must be enabled, `WEBSITES_PORT=3001`, and scaling must be
    fixed at one instance/process.
 5. A combined Marquee SPA/API Entra registration. Its application ID is
-   `AZURE_AD_CLIENT_ID`; its identifier URI and API audience are
-   `api://<Marquee client id>`; its delegated scope is `Marquee.User`; and its
-   workload application roles are the Watchtower read role plus Prism read and
-   write roles documented in [API_CONTRACTS.md](API_CONTRACTS.md). Configure the
-   production SPA redirect and logout URIs on this same registration.
+   `AZURE_AD_CLIENT_ID`; its identifier URI is `api://<Marquee client id>`; its
+   delegated scope is `Marquee.User`; and its workload application roles are
+   the Watchtower read role plus Prism read and write roles documented in
+   [API_CONTRACTS.md](API_CONTRACTS.md). Configure the production SPA redirect
+   and logout URIs on this same registration. Record its
+   `accessTokenAcceptedVersion`: v2 tokens use the client-ID GUID as `aud`, while
+   v1 tokens use the identifier URI.
 
 The repository does not provision or modify Azure, Entra, GitHub settings,
 environments, variables, secrets, DNS, providers, or production data.
@@ -46,7 +48,7 @@ environments, variables, secrets, DNS, providers, or production data.
 | `MARQUEE_ARTIFACT_ROOT` | `/home/data/marquee-artifacts` |
 | `AZURE_AD_TENANT_ID` | Tenant used by MSAL and strict token validation |
 | `AZURE_AD_CLIENT_ID` | Combined Marquee SPA/API application ID |
-| `AZURE_AD_AUDIENCE` | Exactly `api://<Marquee client id>` |
+| `AZURE_AD_AUDIENCE` | Client-ID GUID for v2 tokens, or exactly `api://<Marquee client id>` for v1 tokens |
 | `ADMIN_OID` | Initial and invariant Marquee administrator object ID |
 
 `AAD_TENANT_ID` is a deprecated compatibility alias for
@@ -54,6 +56,11 @@ environments, variables, secrets, DNS, providers, or production data.
 all workflow and current documentation use `AZURE_AD_TENANT_ID`, the canonical
 application-consumed key. `MARQUEE_BOOTSTRAP_ADMIN_OID` is an explicit
 compatibility fallback for `ADMIN_OID`, not a second administrator.
+Startup accepts only the two audience forms belonging to the same combined
+registration. It never accepts an unrelated URI, and token validation still
+requires the configured exact audience, tenant, issuer, scope, client, and
+application role. `/api/config` reports that non-secret audience so the
+deployment agreement probe verifies the same runtime choice the API enforces.
 
 The Docker image bakes immutable semantic version, source commit, workflow run
 ID, and build time into `build-metadata.json`. The runtime copy of commit and

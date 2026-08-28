@@ -31,13 +31,14 @@ assert.equal(ready.status, 'ready')
 assert.equal(ready.database.journalMode, 'delete')
 assert.equal(runtime.entraTenantId, process.env.AZURE_AD_TENANT_ID)
 assert.equal(runtime.entraClientId, process.env.AZURE_AD_CLIENT_ID)
+assert.equal(runtime.entraAudience, process.env.AZURE_AD_AUDIENCE)
 assert.equal(
   runtime.entraApiScope,
   `api://${process.env.AZURE_AD_CLIENT_ID}/Marquee.User`,
 )
 assert.deepEqual(
   Object.keys(runtime).sort(),
-  ['entraApiScope', 'entraClientId', 'entraTenantId'],
+  ['entraApiScope', 'entraAudience', 'entraClientId', 'entraTenantId'],
 )
 
 console.log(JSON.stringify({ version: versionFile, live, ready, runtime }))

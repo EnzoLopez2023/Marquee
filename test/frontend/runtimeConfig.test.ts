@@ -12,20 +12,29 @@ describe('frontend runtime configuration', () => {
     expect(validateRuntimeConfig({
       entraTenantId: tenant,
       entraClientId: client,
+      entraAudience: client,
       entraApiScope: `api://${client}/Marquee.User`,
     })).toBeTruthy()
     expect(() => validateRuntimeConfig(undefined)).toThrow('missing')
     expect(() => validateRuntimeConfig({
       entraTenantId: tenant,
       entraClientId: client,
+      entraAudience: client,
       entraApiScope: `api://${client}/access_as_user`,
     })).toThrow('scope')
+    expect(() => validateRuntimeConfig({
+      entraTenantId: tenant,
+      entraClientId: client,
+      entraAudience: 'api://other-app',
+      entraApiScope: `api://${client}/Marquee.User`,
+    })).toThrow('audience')
   })
 
   it('loads the no-store JSON endpoint and fails closed on an unhealthy response', async () => {
     const expected = {
       entraTenantId: tenant,
       entraClientId: client,
+      entraAudience: client,
       entraApiScope: `api://${client}/Marquee.User`,
     }
     const fetcher = async () => new Response(JSON.stringify(expected), {

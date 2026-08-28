@@ -60,10 +60,22 @@ describe('production deployment configuration', () => {
     },
   )
 
-  it('requires the combined SPA/API identifier URI as the audience', () => {
-    const env = productionEnvironment({ AZURE_AD_AUDIENCE: clientId })
+  it('accepts only the two Entra audience forms for the combined registration', () => {
+    for (const audience of [clientId, `api://${clientId}`]) {
+      const env = productionEnvironment({ AZURE_AD_AUDIENCE: audience })
+      expect(() => validateConfig(loadConfig(env), env)).not.toThrow()
+    }
+    const env = productionEnvironment({ AZURE_AD_AUDIENCE: 'api://other-app' })
     expect(() => validateConfig(loadConfig(env), env)).toThrow(
-      `AZURE_AD_AUDIENCE must be api://${clientId}`,
+      'must match the Marquee client ID or identifier URI',
+    )
+  })
+
+  it('requires an explicit audience so the token version cannot be guessed', () => {
+    const env: NodeJS.ProcessEnv = productionEnvironment()
+    delete env.AZURE_AD_AUDIENCE
+    expect(() => validateConfig(loadConfig(env), env)).toThrow(
+      'Missing required production configuration: AZURE_AD_AUDIENCE',
     )
   })
 
@@ -90,9 +102,15 @@ describe('production deployment configuration', () => {
     expect(runtime).toEqual({
       entraTenantId: tenantId,
       entraClientId: clientId,
+      entraAudience: `api://${clientId}`,
       entraApiScope: `api://${clientId}/Marquee.User`,
     })
-    expect(JSON.stringify(runtime)).not.toContain('audience')
+    expect(Object.keys(runtime).sort()).toEqual([
+      'entraApiScope',
+      'entraAudience',
+      'entraClientId',
+      'entraTenantId',
+    ])
     expect(JSON.stringify(runtime)).not.toContain('ADMIN')
   })
 })

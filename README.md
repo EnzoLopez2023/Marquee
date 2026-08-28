@@ -24,9 +24,9 @@ trusted image-baked build identity plus the built client/server artifacts, uses
 production configuration validation.
 
 The same portable image is configured at runtime: Express serves a no-store
-`/api/config` response containing only the validated Entra tenant, client, and
-exact `api://<client>/Marquee.User` scope before MSAL starts. No browser identity
-setting is compiled into the Vite bundle.
+`/api/config` response containing only the validated Entra tenant, client,
+audience, and exact `api://<client>/Marquee.User` scope before MSAL starts. No
+browser identity setting is compiled into the Vite bundle.
 
 Validation:
 

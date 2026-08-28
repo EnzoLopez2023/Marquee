@@ -43,7 +43,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     entra: {
       tenantId: resolveTenantId(env),
       clientId,
-      audience: (env.AZURE_AD_AUDIENCE || `api://${clientId}`).trim(),
+      audience: (env.AZURE_AD_AUDIENCE || '').trim(),
       adminOid: guidEnv(env.ADMIN_OID),
       bootstrapAdminOid: guidEnv(env.MARQUEE_BOOTSTRAP_ADMIN_OID),
       userScope: 'Marquee.User',
@@ -118,9 +118,14 @@ export function validateConfig(
     ]) {
       if (!value || !guid.test(value)) throw new Error(`${name} must be a GUID`)
     }
-    const expectedAudience = `api://${candidate.entra.clientId}`
-    if (candidate.entra.audience !== expectedAudience) {
-      throw new Error(`AZURE_AD_AUDIENCE must be ${expectedAudience}`)
+    const allowedAudiences = new Set([
+      candidate.entra.clientId,
+      `api://${candidate.entra.clientId}`,
+    ])
+    if (!allowedAudiences.has(candidate.entra.audience)) {
+      throw new Error(
+        'AZURE_AD_AUDIENCE must match the Marquee client ID or identifier URI',
+      )
     }
     resolveAdminOid(
       candidate.entra.adminOid,
@@ -215,9 +220,16 @@ export function frontendRuntimeConfig(candidate: MarqueeConfig = config) {
   if (!guid.test(candidate.entra.tenantId) || !guid.test(candidate.entra.clientId)) {
     throw new Error('Marquee user login is not configured')
   }
+  if (!new Set([
+    candidate.entra.clientId,
+    `api://${candidate.entra.clientId}`,
+  ]).has(candidate.entra.audience)) {
+    throw new Error('Marquee API audience is not configured')
+  }
   return {
     entraTenantId: candidate.entra.tenantId,
     entraClientId: candidate.entra.clientId,
+    entraAudience: candidate.entra.audience,
     entraApiScope: `api://${candidate.entra.clientId}/${candidate.entra.userScope}`,
   }
 }

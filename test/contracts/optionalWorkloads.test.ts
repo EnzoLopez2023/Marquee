@@ -18,6 +18,7 @@ describe('optional workload identities', () => {
       .use(createHealthRouter(handle, loadConfig({
         AZURE_AD_TENANT_ID: tenantId,
         AZURE_AD_CLIENT_ID: clientId,
+        AZURE_AD_AUDIENCE: clientId,
       })))
       .use(createContractsV1Router(handle.db))
     try {

@@ -142,7 +142,7 @@ jobs:
     needs: build-and-push
     runs-on: ubuntu-latest
     environment: production
-    timeout-minutes: 20
+    timeout-minutes: 30
     concurrency:
       group: marquee-production
       cancel-in-progress: false
@@ -192,12 +192,12 @@ jobs:
           EXPECTED_BUILD_ID: ${{ needs.build-and-push.outputs.build_id }}
         run: |
           set -euo pipefail
-          for attempt in $(seq 1 40); do
-            if curl --fail --silent --show-error "$SITE_URL/version.json" -o version-file.json \
-              && curl --fail --silent --show-error "$SITE_URL/api/version" -o version-api.json \
-              && curl --fail --silent --show-error "$SITE_URL/api/live" -o live.json \
-              && curl --fail --silent --show-error "$SITE_URL/api/ready" -o ready.json \
-              && curl --fail --silent --show-error "$SITE_URL/api/config" -o config.json \
+          for attempt in $(seq 1 20); do
+            if curl --connect-timeout 2 --max-time 5 --fail --silent --show-error "$SITE_URL/version.json" -o version-file.json \
+              && curl --connect-timeout 2 --max-time 5 --fail --silent --show-error "$SITE_URL/api/version" -o version-api.json \
+              && curl --connect-timeout 2 --max-time 5 --fail --silent --show-error "$SITE_URL/api/live" -o live.json \
+              && curl --connect-timeout 2 --max-time 5 --fail --silent --show-error "$SITE_URL/api/ready" -o ready.json \
+              && curl --connect-timeout 2 --max-time 5 --fail --silent --show-error "$SITE_URL/api/config" -o config.json \
               && cmp -s version-file.json version-api.json \
               && jq -e --arg commit "$EXPECTED_COMMIT" --arg version "$EXPECTED_VERSION" --arg build "$EXPECTED_BUILD_ID" \
                 '.app == "marquee" and .environment == "production" and .commit == $commit and .version == $version and .buildId == $build' version-api.json \
@@ -208,15 +208,18 @@ jobs:
               && jq -e '
                 (.entraTenantId | test("^[0-9a-f-]{36}$"))
                 and (.entraClientId | test("^[0-9a-f-]{36}$"))
+                and (.entraAudience == .entraClientId or .entraAudience == ("api://" + .entraClientId))
                 and .entraApiScope == ("api://" + .entraClientId + "/Marquee.User")
-                and (keys | sort) == ["entraApiScope","entraClientId","entraTenantId"]
+                and (keys | sort) == ["entraApiScope","entraAudience","entraClientId","entraTenantId"]
               ' config.json; then
               exit 0
             fi
-            sleep 15
+            sleep 10
           done
           echo "::error::Deployed Marquee did not reach identity/health agreement"
           exit 1
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
 
       - name: Promote verified digest
         env:
@@ -225,9 +228,12 @@ jobs:
         run: |
           set -euo pipefail
           az acr login --name "${{ vars.ACR_NAME }}"
-          docker pull "$IMAGE@$DIGEST"
-          docker tag "$IMAGE@$DIGEST" "$IMAGE:production"
-          docker push "$IMAGE:production"
+          docker buildx imagetools create --tag "$IMAGE:production" "$IMAGE@$DIGEST"
+          PROMOTED_DIGEST="$(az acr repository show \
+            --name "${{ vars.ACR_NAME }}" \
+            --image "${IMAGE#*.azurecr.io/}:production" \
+            --query digest -o tsv)"
+          test "$PROMOTED_DIGEST" = "$DIGEST"
 
       - name: Roll back failed or cancelled deployment
         if: ${{ (failure() || cancelled()) && steps.deploy.outcome == 'success' }}

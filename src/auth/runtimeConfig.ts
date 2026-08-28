@@ -1,6 +1,7 @@
 export interface MarqueeRuntimeConfig {
   entraTenantId: string;
   entraClientId: string;
+  entraAudience: string;
   entraApiScope: string;
 }
 
@@ -13,6 +14,7 @@ export function validateRuntimeConfig(value: unknown): MarqueeRuntimeConfig {
   const candidate = value as Partial<MarqueeRuntimeConfig>;
   const tenantId = candidate.entraTenantId;
   const clientId = candidate.entraClientId;
+  const audience = candidate.entraAudience;
   const apiScope = candidate.entraApiScope;
   if (
     typeof tenantId !== 'string'
@@ -23,12 +25,16 @@ export function validateRuntimeConfig(value: unknown): MarqueeRuntimeConfig {
     throw new Error('Marquee runtime Entra tenant/client configuration is invalid');
   }
   const expectedScope = `api://${clientId}/Marquee.User`;
+  if (audience !== clientId && audience !== `api://${clientId}`) {
+    throw new Error('Marquee runtime Entra audience is invalid');
+  }
   if (apiScope !== expectedScope) {
     throw new Error('Marquee runtime Entra scope is invalid');
   }
   return {
     entraTenantId: tenantId,
     entraClientId: clientId,
+    entraAudience: audience,
     entraApiScope: apiScope,
   };
 }
