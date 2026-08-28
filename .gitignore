@@ -1,0 +1,11 @@
+node_modules/
+dist/
+dist-server/
+coverage/
+.env
+*.db
+*.db-*
+backups/
+scripts/sonarr-agent/sonarr-agent.config.json*
+scripts/sonarr-agent/*.ndjson
+scripts/sonarr-agent/*.dead-letter
