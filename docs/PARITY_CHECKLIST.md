@@ -69,6 +69,10 @@
 - [x] Zero Sonarr endpoint evidence is unavailable
 - [x] Committed Plex deletes return an explicit nonretryable result if final audit append fails
 - [x] Recovery verifies exact table/index/trigger SQL hashes
+- [x] Restore stages/verifies then atomically replaces under physical/logical lifetime fencing
+- [x] Restore refuses active/stale instances and logical/physical SQLite sidecars
+- [x] Restore rejects hard-link aliases and stays fenced through post-rename verification
+- [x] Staged restore clears copied runtime/delete leases before publish
 - [x] Sonarr durable queue compacts coalescing immediately and enforces actual file bytes
 - [x] Dead-letter archival failure retains queue entries and propagates
 - [x] Queue append fsyncs before eligibility; corrupt/torn rows are durably quarantined or startup fails
@@ -77,6 +81,7 @@
 - [x] Renewable singleton SQLite lease fences requests and aborts in-flight deletes on loss
 - [x] Unresolved permissions keep all edit/delete controls disabled
 - [x] Admin role replacement and authoritative audit commit atomically
+- [x] Final persisted admin grant cannot be removed; bootstrap grant+audit are atomic
 - [x] Production requires a canonical admin or explicit bootstrap-admin OID
 - [x] Duplicate scan/audit path responses require edit plus destructive role
 - [x] General Plex/Tautulli media payloads remove Location/path keys and absolute path strings

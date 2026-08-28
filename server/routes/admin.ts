@@ -3,10 +3,14 @@ import type Database from 'better-sqlite3'
 import { Router } from 'express'
 import type { Repositories } from '../../lib/db/repositories/index.js'
 import type { AppRole } from '../../lib/db/repositories/identities.js'
-import { config, publicConfigSummary } from '../config.js'
+import { config, publicConfigSummary, resolveAdminOid } from '../config.js'
 import { plexJson } from '../clients/plex.js'
 import { tautulliApi } from '../clients/tautulli.js'
 import { sanitizeSonarrData } from '../domain/sonarr/sanitize.js'
+import {
+  assertAdminGrantRemains,
+  LastAdminRequiredError,
+} from '../domain/auth/adminRoles.js'
 
 const roles = new Set<AppRole>(['viewer', 'duplicate_delete', 'admin'])
 
@@ -40,6 +44,16 @@ export function createAdminRouter(
       tenantId: String(req.params.tenantId),
       oid: String(req.params.oid),
     }
+    const configuredAdmin = resolveAdminOid(
+      config.entra.adminOid,
+      config.entra.bootstrapAdminOid,
+      false,
+    )
+    if (target.oid === configuredAdmin && !requested.includes('admin')) {
+      return res.status(409).json({
+        error: { code: 'CONFIGURED_ADMIN_REQUIRED' },
+      })
+    }
     const exists = db.prepare(
       'SELECT 1 FROM app_identities WHERE tenant_id = ? AND oid = ?',
     ).get(target.tenantId, target.oid)
@@ -47,6 +61,7 @@ export function createAdminRouter(
     try {
       db.transaction(() => {
         repositories.identities.replaceRolesInTransaction(target, requested, req.identity!)
+        assertAdminGrantRemains(db)
         repositories.audit.appendAuthoritativeInTransaction({
           category: 'change',
           action: 'Updated Marquee roles',
@@ -58,6 +73,9 @@ export function createAdminRouter(
       })()
       return res.json({ ok: true, roles: requested })
     } catch (error) {
+      if (error instanceof LastAdminRequiredError) {
+        return res.status(409).json({ error: { code: error.code } })
+      }
       console.error('Atomic admin role update failed:', error)
       return res.status(500).json({ error: { code: 'ADMIN_ROLE_UPDATE_FAILED' } })
     }

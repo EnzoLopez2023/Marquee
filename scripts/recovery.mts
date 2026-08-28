@@ -1,4 +1,3 @@
-import { existsSync } from 'node:fs'
 import { createBackup, restoreBackup, verifyBackup } from '../lib/recovery/backup.js'
 import { uploadAndVerifyBackup } from '../lib/recovery/offhost.js'
 
@@ -8,7 +7,6 @@ if (command === 'backup' && source && destination) {
 } else if (command === 'verify' && source) {
   console.log(JSON.stringify(await verifyBackup(source), null, 2))
 } else if (command === 'restore' && source && destination) {
-  if (existsSync(destination)) throw new Error('Restore destination must not already exist')
   console.log(JSON.stringify(await restoreBackup(source, destination), null, 2))
 } else if (command === 'upload' && source) {
   console.log(JSON.stringify(await uploadAndVerifyBackup(

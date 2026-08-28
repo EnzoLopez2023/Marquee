@@ -31,6 +31,25 @@ export class IdentityRepository {
     `).all(identity.tenantId, identity.oid) as Array<{ role: AppRole }>).map((row) => row.role)
   }
 
+  async ensureRole(
+    identity: Pick<Identity, 'tenantId' | 'oid'>,
+    role: AppRole,
+  ): Promise<boolean> {
+    return this.db.transaction(() => this.ensureRoleInTransaction(identity, role))()
+  }
+
+  ensureRoleInTransaction(
+    identity: Pick<Identity, 'tenantId' | 'oid'>,
+    role: AppRole,
+  ): boolean {
+    const result = this.db.prepare(`
+      INSERT OR IGNORE INTO app_role_grants(
+        tenant_id, oid, role, granted_at, granted_by_tenant_id, granted_by_oid
+      ) VALUES (?, ?, ?, ?, NULL, NULL)
+    `).run(identity.tenantId, identity.oid, role, Date.now())
+    return result.changes === 1
+  }
+
   async features(identity: Pick<Identity, 'tenantId' | 'oid'>) {
     const rows = this.db.prepare(`
       SELECT feature, can_edit, is_hidden FROM app_feature_permissions

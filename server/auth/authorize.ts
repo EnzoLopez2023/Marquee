@@ -1,7 +1,11 @@
 import type { NextFunction, Request, Response } from 'express'
 import type { Repositories } from '../../lib/db/repositories/index.js'
 import type { AppRole, Identity } from '../../lib/db/repositories/identities.js'
-import { assertDelegatedUserClaims, verifyAccessToken } from './entra.js'
+import {
+  assertDelegatedUserClaims,
+  verifyAccessToken,
+  type VerifiedClaims,
+} from './entra.js'
 import { config, resolveAdminOid } from '../config.js'
 
 const bearer = (req: Request) => {
@@ -13,8 +17,14 @@ export function createAuthorization(repositories: Repositories) {
   const requireUser = async (req: Request, res: Response, next: NextFunction) => {
     const token = bearer(req)
     if (!token) return res.status(401).json({ error: { code: 'SIGN_IN_REQUIRED' } })
+    let claims: VerifiedClaims
     try {
-      const claims = assertDelegatedUserClaims(await verifyAccessToken(token))
+      claims = assertDelegatedUserClaims(await verifyAccessToken(token))
+    } catch (error) {
+      console.warn('Entra access token rejected:', error instanceof Error ? error.message : String(error))
+      return res.status(401).json({ error: { code: 'INVALID_ACCESS_TOKEN' } })
+    }
+    try {
       const identity: Identity = {
         tenantId: claims.tid,
         oid: claims.oid,
@@ -24,21 +34,31 @@ export function createAuthorization(repositories: Repositories) {
         name: typeof claims.name === 'string' ? claims.name : null,
       }
       await repositories.identities.touch(identity)
-      const roles = await repositories.identities.roles(identity)
       const featurePermissions = await repositories.identities.features(identity)
       const configuredAdmin = resolveAdminOid(
         config.entra.adminOid,
         config.entra.bootstrapAdminOid,
         false,
       )
-      if (identity.oid === configuredAdmin && !roles.includes('admin')) roles.push('admin')
+      if (identity.oid === configuredAdmin) {
+        repositories.transaction(() => {
+          const inserted = repositories.identities.ensureRoleInTransaction(identity, 'admin')
+          if (inserted) {
+            repositories.audit.appendAuthoritativeInTransaction({
+              category: 'auth',
+              action: 'Configured administrator grant materialized',
+            }, identity, req.ip ?? null)
+          }
+        })
+      }
+      const roles = await repositories.identities.roles(identity)
       req.identity = identity
       req.roles = roles.length ? roles : ['viewer']
       req.featurePermissions = featurePermissions
       return next()
     } catch (error) {
-      console.warn('Entra access token rejected:', error instanceof Error ? error.message : String(error))
-      return res.status(401).json({ error: { code: 'INVALID_ACCESS_TOKEN' } })
+      console.error('Authorization state update failed:', error)
+      return res.status(500).json({ error: { code: 'AUTHORIZATION_STATE_FAILED' } })
     }
   }
 

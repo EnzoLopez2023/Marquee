@@ -8,6 +8,9 @@ export function createRepositories(db: Database.Database) {
     audit: new AuditRepository(db),
     identities: new IdentityRepository(db),
     providerHealth: new ProviderHealthRepository(db),
+    transaction<T>(work: () => T): T {
+      return db.transaction(work)()
+    },
   }
 }
 

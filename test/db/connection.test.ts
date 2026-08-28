@@ -54,7 +54,7 @@ describe('SQLite authority', () => {
     const directory = mkdtempSync(path.join(tmpdir(), 'marquee-instance-lease-'))
     const databasePath = path.join(directory, 'marquee.db')
     const first = openDatabase(databasePath)
-    expect(() => openDatabase(databasePath)).toThrow('active SQLite instance lease')
+    expect(() => openDatabase(databasePath)).toThrow('lifetime instance lock')
     first.close()
     const second = openDatabase(databasePath)
     expect(second.instanceLeaseHealthy()).toBe(true)

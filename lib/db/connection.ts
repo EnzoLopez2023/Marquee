@@ -5,6 +5,12 @@ import Database from 'better-sqlite3'
 import { config } from '../../server/config.js'
 import { migrate, SCHEMA_VERSION } from './migrate.js'
 import { assertExactMarqueeSchema } from './schemaIdentity.js'
+import {
+  acquireAuthorityTransitionLock,
+  acquireInstanceLifetimeLock,
+  canonicalAuthorityPath,
+  type AuthorityTransitionLock,
+} from './authorityTransitionLock.js'
 
 export interface DatabaseHandle {
   db: Database.Database
@@ -19,19 +25,25 @@ export interface DatabaseHandle {
 
 export function openDatabase(databasePath = config.databasePath): DatabaseHandle {
   mkdirSync(path.dirname(databasePath), { recursive: true })
-  const db = new Database(databasePath)
+  const authorityPath = canonicalAuthorityPath(databasePath)
+  const transitionLock = acquireAuthorityTransitionLock(authorityPath)
+  let lifetimeLock: AuthorityTransitionLock | null = null
+  let db: Database.Database | null = null
   try {
-    const journalMode = String(db.pragma('journal_mode = DELETE', { simple: true })).toLowerCase()
+    lifetimeLock = acquireInstanceLifetimeLock(authorityPath)
+    db = new Database(databasePath)
+    const opened = db
+    const journalMode = String(opened.pragma('journal_mode = DELETE', { simple: true })).toLowerCase()
     if (journalMode !== 'delete') {
       throw new Error(`SQLite refused DELETE journal mode: ${journalMode}`)
     }
-    db.pragma('foreign_keys = ON')
-    db.pragma(`busy_timeout = ${config.sqliteBusyTimeoutMs}`)
-    migrate(db)
-    assertExactMarqueeSchema(db)
+    opened.pragma('foreign_keys = ON')
+    opened.pragma(`busy_timeout = ${config.sqliteBusyTimeoutMs}`)
+    migrate(opened)
+    assertExactMarqueeSchema(opened)
     const instanceId = randomUUID()
     const leaseDurationMs = 60_000
-    const acquireLease = db.prepare(`
+    const acquireLease = opened.prepare(`
       INSERT INTO runtime_instance_lease(
         id, owner_id, acquired_at, heartbeat_at, expires_at
       ) VALUES (1, ?, ?, ?, ?)
@@ -46,6 +58,7 @@ export function openDatabase(databasePath = config.databasePath): DatabaseHandle
     if (acquireLease.run(instanceId, now, now, now + leaseDurationMs).changes !== 1) {
       throw new Error('Another Marquee process holds the active SQLite instance lease')
     }
+    transitionLock.release()
     let leaseHealthy = true
     let leaseLossNotified = false
     const leaseLossListeners = new Set<() => void>()
@@ -59,7 +72,7 @@ export function openDatabase(databasePath = config.databasePath): DatabaseHandle
     }
     const assertInstanceLease = () => {
       if (!leaseHealthy) throw new Error('Runtime SQLite instance lease is not healthy')
-      const lease = db.prepare(`
+      const lease = opened.prepare(`
         SELECT owner_id, expires_at FROM runtime_instance_lease WHERE id = 1
       `).get() as { owner_id: string; expires_at: number } | undefined
       if (!lease || lease.owner_id !== instanceId || lease.expires_at <= Date.now()) {
@@ -70,7 +83,7 @@ export function openDatabase(databasePath = config.databasePath): DatabaseHandle
     const heartbeat = setInterval(() => {
       try {
         const heartbeatAt = Date.now()
-        const result = db.prepare(`
+        const result = opened.prepare(`
           UPDATE runtime_instance_lease
           SET heartbeat_at = ?, expires_at = ?
           WHERE id = 1 AND owner_id = ?
@@ -83,7 +96,7 @@ export function openDatabase(databasePath = config.databasePath): DatabaseHandle
     heartbeat.unref()
     let closed = false
     return {
-      db,
+      db: opened,
       path: databasePath,
       schemaVersion: SCHEMA_VERSION,
       instanceId,
@@ -99,16 +112,26 @@ export function openDatabase(databasePath = config.databasePath): DatabaseHandle
         clearInterval(heartbeat)
         leaseLossListeners.clear()
         try {
-          db.prepare(`
+          opened.prepare(`
             DELETE FROM runtime_instance_lease WHERE id = 1 AND owner_id = ?
           `).run(instanceId)
         } finally {
-          db.close()
+          try {
+            opened.close()
+          } finally {
+            lifetimeLock?.release()
+          }
         }
       },
     }
   } catch (error) {
-    db.close()
+    try {
+      db?.close()
+    } finally {
+      lifetimeLock?.release()
+    }
     throw error
+  } finally {
+    transitionLock.release()
   }
 }
