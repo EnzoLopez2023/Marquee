@@ -38,11 +38,11 @@ list_roles() {
   az role assignment list \
     --assignee-object-id "$1" \
     --scope "$2" \
+    --include-groups \
     --include-inherited \
-    --all \
     --fill-principal-name false \
     --fill-role-definition-name false \
-    --query '[].{condition:condition,roleDefinitionId:roleDefinitionId,scope:scope}' \
+    --query '[].{condition:condition,principalId:principalId,roleDefinitionId:roleDefinitionId,scope:scope}' \
     -o json
 }
 
@@ -55,6 +55,8 @@ list_roles "$WEBAPP_PULL_OBJECT_ID" "$ACR_ID" > "$work_directory/webapp-pull.jso
 node scripts/validate-deployment-roles.mjs \
   --acr-id "$ACR_ID" \
   --webapp-id "$WEBAPP_ID" \
+  --deploy-object-id "$DEPLOY_OBJECT_ID" \
+  --webapp-pull-object-id "$WEBAPP_PULL_OBJECT_ID" \
   --deploy-acr-assignments "$work_directory/deploy-acr.json" \
   --deploy-webapp-assignments "$work_directory/deploy-webapp.json" \
   --webapp-pull-assignments "$work_directory/webapp-pull.json"

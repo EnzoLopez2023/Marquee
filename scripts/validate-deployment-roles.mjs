@@ -27,6 +27,14 @@ function roleId(value) {
   return normalizeResourceId(value).split('/').at(-1) || ''
 }
 
+function objectId(value, label) {
+  const normalized = String(value || '').trim().toLowerCase()
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(normalized)) {
+    throw new Error(`${label} is not a GUID`)
+  }
+  return normalized
+}
+
 function readAssignments(filePath) {
   const value = JSON.parse(readFileSync(filePath, 'utf8'))
   if (!Array.isArray(value)) throw new Error(`${filePath} must contain a JSON array`)
@@ -36,6 +44,7 @@ function readAssignments(filePath) {
       || typeof entry !== 'object'
       || typeof entry.roleDefinitionId !== 'string'
       || typeof entry.scope !== 'string'
+      || typeof entry.principalId !== 'string'
       || !(
         entry.condition === null
         || entry.condition === undefined
@@ -48,29 +57,36 @@ function readAssignments(filePath) {
       roleId: roleId(entry.roleDefinitionId),
       scope: normalizeResourceId(entry.scope),
       condition: entry.condition || '',
+      principalId: objectId(entry.principalId, `principalId in ${filePath}`),
     }
   })
 }
 
-function validateScope(assignments, targetId, requiredRoleIds, label) {
+function validateScope(assignments, targetId, expectedObjectId, requiredRoleIds, label) {
   const target = normalizeResourceId(targetId)
+  const principal = objectId(expectedObjectId, `${label} object ID`)
   if (!target.startsWith('/subscriptions/')) {
     throw new Error(`${label} resource ID is invalid`)
   }
   const required = new Set(requiredRoleIds)
   const found = new Set()
   for (const assignment of assignments) {
+    const name = ROLE_NAMES.get(assignment.roleId) || assignment.roleId
     const affectsTarget = assignment.scope === target
       || target.startsWith(`${assignment.scope}/`)
     if (!affectsTarget) {
       throw new Error(`Role query returned a scope unrelated to ${label}`)
+    }
+    if (assignment.principalId !== principal) {
+      throw new Error(
+        `Unexpected group-derived ${name} assignment at ${assignment.scope} affects ${label}`,
+      )
     }
     if (
       assignment.scope !== target
       || !required.has(assignment.roleId)
       || assignment.condition
     ) {
-      const name = ROLE_NAMES.get(assignment.roleId) || assignment.roleId
       throw new Error(
         `Unexpected ${name} assignment at ${assignment.scope} affects ${label}`,
       )
@@ -87,6 +103,8 @@ function validateScope(assignments, targetId, requiredRoleIds, label) {
 export function validateDeploymentRoles({
   acrId,
   webappId,
+  deployObjectId,
+  webappPullObjectId,
   deployAcrAssignments,
   deployWebappAssignments,
   webappPullAssignments,
@@ -94,18 +112,21 @@ export function validateDeploymentRoles({
   validateScope(
     deployAcrAssignments,
     acrId,
+    deployObjectId,
     [ROLES.reader, ROLES.acrPush, ROLES.acrDelete],
     'deployment identity shared ACR',
   )
   validateScope(
     deployWebappAssignments,
     webappId,
+    deployObjectId,
     [ROLES.websiteContributor],
     'deployment identity Marquee Web App',
   )
   validateScope(
     webappPullAssignments,
     acrId,
+    webappPullObjectId,
     [ROLES.acrPull],
     'App Service managed identity shared ACR',
   )
@@ -122,6 +143,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   validateDeploymentRoles({
     acrId: argument('--acr-id'),
     webappId: argument('--webapp-id'),
+    deployObjectId: argument('--deploy-object-id'),
+    webappPullObjectId: argument('--webapp-pull-object-id'),
     deployAcrAssignments: readAssignments(argument('--deploy-acr-assignments')),
     deployWebappAssignments: readAssignments(argument('--deploy-webapp-assignments')),
     webappPullAssignments: readAssignments(argument('--webapp-pull-assignments')),

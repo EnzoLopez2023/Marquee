@@ -8,6 +8,8 @@ const subscription = '/subscriptions/11111111-1111-4111-8111-111111111111'
 const resourceGroup = `${subscription}/resourceGroups/rg-personal-apps-prod`
 const acrId = `${resourceGroup}/providers/Microsoft.ContainerRegistry/registries/acrenzolopez01`
 const webappId = `${resourceGroup}/providers/Microsoft.Web/sites/app-marquee-prod`
+const deployObjectId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+const webappPullObjectId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
 const roleIds = {
   Reader: 'acdd72a7-3385-48ef-bd42-f606fba81ae7',
   AcrPush: '8311e382-0749-4cb8-b61a-304f252e45ec',
@@ -24,13 +26,19 @@ interface Assignment {
   roleDefinitionId: string
   scope: string
   condition: string | null
+  principalId: string
 }
 
-function assignment(role: RoleName, scope: string): Assignment {
+function assignment(
+  role: RoleName,
+  scope: string,
+  principalId = role === 'AcrPull' ? webappPullObjectId : deployObjectId,
+): Assignment {
   return {
     roleDefinitionId: `${subscription}/providers/Microsoft.Authorization/roleDefinitions/${roleIds[role]}`,
     scope,
     condition: null,
+    principalId,
   }
 }
 
@@ -61,6 +69,8 @@ function validate(options: {
     'scripts/validate-deployment-roles.mjs',
     '--acr-id', acrId,
     '--webapp-id', webappId,
+    '--deploy-object-id', deployObjectId,
+    '--webapp-pull-object-id', webappPullObjectId,
     '--deploy-acr-assignments', files.deployAcr,
     '--deploy-webapp-assignments', files.deployWebapp,
     '--webapp-pull-assignments', files.webappPull,
@@ -84,9 +94,10 @@ describe('deployment identity role contract', () => {
     )
     expect(script).toContain('claims.oid')
     expect(script).toContain('--assignee-object-id "$1"')
+    expect(script).toContain('--include-groups')
     expect(script).toContain('--fill-principal-name false')
     expect(script).toContain('az webapp identity show')
-    expect(script).not.toContain('--include-groups')
+    expect(script).not.toContain('--all')
   })
 
   it('accepts only the canonical exact-scope assignments', () => {
@@ -157,5 +168,22 @@ describe('deployment identity role contract', () => {
     })
     expect(result.status).not.toBe(0)
     expect(result.stderr).toContain('App Service managed identity shared ACR')
+  })
+
+  it('rejects group-derived assignments while requiring direct assignments', () => {
+    const result = validate({
+      deployAcr: [
+        assignment('Reader', acrId),
+        assignment('AcrPush', acrId),
+        assignment('AcrDelete', acrId),
+        assignment(
+          'Contributor',
+          resourceGroup,
+          'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+        ),
+      ],
+    })
+    expect(result.status).not.toBe(0)
+    expect(result.stderr).toContain('Unexpected group-derived Contributor assignment')
   })
 })
