@@ -37,6 +37,16 @@ afterEach(() => {
 })
 
 describe('production deployment configuration', () => {
+  it('allows production startup without deferred identity integrations', () => {
+    const env = productionEnvironment({
+      AZURE_AD_TENANT_ID: '',
+      AZURE_AD_CLIENT_ID: '',
+      AZURE_AD_AUDIENCE: '',
+      ADMIN_OID: '',
+    })
+    expect(() => validateConfig(loadConfig(env), env)).not.toThrow()
+  })
+
   it('allows startup without optional workload client IDs', () => {
     const env = productionEnvironment()
     expect(() => validateConfig(loadConfig(env), env)).not.toThrow()
@@ -71,11 +81,13 @@ describe('production deployment configuration', () => {
     )
   })
 
-  it('requires an explicit audience so the token version cannot be guessed', () => {
+  it('keeps user login unavailable when its audience is absent', () => {
     const env: NodeJS.ProcessEnv = productionEnvironment()
     delete env.AZURE_AD_AUDIENCE
-    expect(() => validateConfig(loadConfig(env), env)).toThrow(
-      'Missing required production configuration: AZURE_AD_AUDIENCE',
+    const candidate = loadConfig(env)
+    expect(() => validateConfig(candidate, env)).not.toThrow()
+    expect(() => frontendRuntimeConfig(candidate)).toThrow(
+      'Marquee user login is not configured',
     )
   })
 

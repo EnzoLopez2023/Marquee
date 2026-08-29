@@ -6,7 +6,12 @@ import {
   verifyAccessToken,
   type VerifiedClaims,
 } from './entra.js'
-import { config, resolveAdminOid } from '../config.js'
+import {
+  adminIdentityConfigured,
+  config,
+  resolveAdminOid,
+  userAuthenticationConfigured,
+} from '../config.js'
 
 const bearer = (req: Request) => {
   const header = req.get('authorization') || ''
@@ -15,6 +20,11 @@ const bearer = (req: Request) => {
 
 export function createAuthorization(repositories: Repositories) {
   const requireUser = async (req: Request, res: Response, next: NextFunction) => {
+    if (!userAuthenticationConfigured()) {
+      return res.status(503).json({
+        error: { code: 'USER_LOGIN_NOT_CONFIGURED' },
+      })
+    }
     const token = bearer(req)
     if (!token) return res.status(401).json({ error: { code: 'SIGN_IN_REQUIRED' } })
     let claims: VerifiedClaims
@@ -67,6 +77,11 @@ export function createAuthorization(repositories: Repositories) {
     res: Response,
     next: NextFunction,
   ) => {
+    if (role === 'admin' && !adminIdentityConfigured()) {
+      return res.status(503).json({
+        error: { code: 'ADMIN_IDENTITY_NOT_CONFIGURED' },
+      })
+    }
     const roles = req.roles ?? []
     if (roles.includes('admin') || roles.includes(role)) return next()
     return res.status(403).json({ error: { code: 'ROLE_REQUIRED', role } })

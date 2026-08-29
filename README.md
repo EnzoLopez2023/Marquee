@@ -20,13 +20,16 @@ npm run dev
 
 `npm start` is production-only: it refuses a non-production `NODE_ENV`, requires
 trusted image-baked build identity plus the built client/server artifacts, uses
-`/home/data/marquee.db`, validates writable persistent storage, and runs full
-production configuration validation.
+`/home/data/marquee.db`, and validates writable persistent storage. Deferred
+identity integrations do not block startup or health/version endpoints.
 
 The same portable image is configured at runtime: Express serves a no-store
 `/api/config` response containing only the validated Entra tenant, client,
 audience, and exact `api://<client>/Marquee.User` scope before MSAL starts. No
 browser identity setting is compiled into the Vite bundle.
+When the registration is unavailable, the SPA renders an explicit sign-in
+unavailable state and protected APIs return 503 without accepting anonymous
+access.
 
 Build:
 

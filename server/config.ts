@@ -93,45 +93,37 @@ export function validateConfig(
   candidate: MarqueeConfig = config,
   env: NodeJS.ProcessEnv = process.env,
 ): void {
-  const missing = [
-    ['AZURE_AD_TENANT_ID', candidate.entra.tenantId],
-    ['AZURE_AD_CLIENT_ID', candidate.entra.clientId],
-    ['AZURE_AD_AUDIENCE', candidate.entra.audience],
-  ].filter(([, value]) => !value).map(([name]) => name)
-  if (candidate.production && missing.length) {
-    throw new Error(`Missing required production configuration: ${missing.join(', ')}`)
-  }
   if (!canonicalPlexId(candidate.plex.librarySection)) {
     throw new Error('PLEX_LIBRARY_SECTION must be a canonical positive integer')
   }
   assertPlexTlsConfiguration(candidate.plex.baseUrl, candidate.plex.tls)
   for (const [name, value] of [
+    ['AZURE_AD_TENANT_ID', candidate.entra.tenantId],
+    ['AZURE_AD_CLIENT_ID', candidate.entra.clientId],
+    ['ADMIN_OID', candidate.entra.adminOid],
+    ['MARQUEE_BOOTSTRAP_ADMIN_OID', candidate.entra.bootstrapAdminOid],
     ['WATCHTOWER_CLIENT_ID', candidate.entra.workloads.watchtower.clientId],
     ['PRISM_CLIENT_ID', candidate.entra.workloads.prism.clientId],
   ]) {
     if (value && !guid.test(value)) throw new Error(`${name} must be a GUID when configured`)
   }
-  if (candidate.production) {
-    for (const [name, value] of [
-      ['AZURE_AD_TENANT_ID', candidate.entra.tenantId],
-      ['AZURE_AD_CLIENT_ID', candidate.entra.clientId],
-    ]) {
-      if (!value || !guid.test(value)) throw new Error(`${name} must be a GUID`)
-    }
+  if (candidate.entra.audience) {
     const allowedAudiences = new Set([
       candidate.entra.clientId,
       `api://${candidate.entra.clientId}`,
     ])
-    if (!allowedAudiences.has(candidate.entra.audience)) {
+    if (!candidate.entra.clientId || !allowedAudiences.has(candidate.entra.audience)) {
       throw new Error(
         'AZURE_AD_AUDIENCE must match the Marquee client ID or identifier URI',
       )
     }
-    resolveAdminOid(
-      candidate.entra.adminOid,
-      candidate.entra.bootstrapAdminOid,
-      true,
-    )
+  }
+  resolveAdminOid(
+    candidate.entra.adminOid,
+    candidate.entra.bootstrapAdminOid,
+    false,
+  )
+  if (candidate.production) {
     assertRuntimeStorage(candidate, env)
   }
 }
@@ -216,15 +208,26 @@ export function publicConfigSummary() {
 
 }
 
+export function userAuthenticationConfigured(candidate: MarqueeConfig = config) {
+  return guid.test(candidate.entra.tenantId)
+    && guid.test(candidate.entra.clientId)
+    && new Set([
+      candidate.entra.clientId,
+      `api://${candidate.entra.clientId}`,
+    ]).has(candidate.entra.audience)
+}
+
+export function adminIdentityConfigured(candidate: MarqueeConfig = config) {
+  return Boolean(resolveAdminOid(
+    candidate.entra.adminOid,
+    candidate.entra.bootstrapAdminOid,
+    false,
+  ))
+}
+
 export function frontendRuntimeConfig(candidate: MarqueeConfig = config) {
-  if (!guid.test(candidate.entra.tenantId) || !guid.test(candidate.entra.clientId)) {
+  if (!userAuthenticationConfigured(candidate)) {
     throw new Error('Marquee user login is not configured')
-  }
-  if (!new Set([
-    candidate.entra.clientId,
-    `api://${candidate.entra.clientId}`,
-  ]).has(candidate.entra.audience)) {
-    throw new Error('Marquee API audience is not configured')
   }
   return {
     entraTenantId: candidate.entra.tenantId,

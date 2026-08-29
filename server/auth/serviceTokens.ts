@@ -1,7 +1,7 @@
 import { timingSafeEqual } from 'node:crypto'
 import type { NextFunction, Request, Response } from 'express'
 import { assertWorkloadClaims, verifyAccessToken } from './entra.js'
-import { config } from '../config.js'
+import { config, userAuthenticationConfigured } from '../config.js'
 
 const bearer = (req: Request) => {
   const auth = req.get('authorization') || ''
@@ -16,7 +16,7 @@ export function requireWorkload(
     const clientId = consumer === 'watchtower'
       ? config.entra.workloads.watchtower.clientId
       : config.entra.workloads.prism.clientId
-    if (!clientId) {
+    if (!clientId || !userAuthenticationConfigured()) {
       return res.status(503).json({
         error: {
           code: 'WORKLOAD_IDENTITY_NOT_CONFIGURED',
