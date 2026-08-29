@@ -1,140 +1,54 @@
 # Production deployment
 
-Marquee is a single Node 24 Linux container: one Express process serves the SPA
-and API, and one `better-sqlite3` connection owns `/home/data/marquee.db`.
-The image runs as UID/GID 10001 behind `dumb-init`. `/home/data` must be an
-Azure App Service persistent storage mount. Production must remain one worker
-and one App Service instance; SQLite uses `journal_mode=DELETE` and a bounded
-busy timeout. Deployment never migrates production data or replaces, copies,
-or clears `/home/data`.
+Marquee runs as one Node 24 Linux container. Express serves the SPA and API, and
+one `better-sqlite3` connection owns `/home/data/marquee.db`. The App Service
+must use persistent storage and remain at one worker and one instance.
 
-## External prerequisites
+## Required external configuration
 
-The workflow consumes existing resources only. Operators must create and
-configure these outside this repository:
+The deployment workflow expects these repository variables:
 
-1. A protected GitHub `production` environment with required reviewers as
-   appropriate.
-2. Repository or `production` environment variables `AZURE_CLIENT_ID`,
-   `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `WEBAPP_NAME`, and
-   `RESOURCE_GROUP`.
-3. An Entra federated credential on `AZURE_CLIENT_ID` whose subject matches this
-   repository and protected environment. Give that service principal only these
-   direct built-in role assignments:
-   - `Reader` (`acdd72a7-3385-48ef-bd42-f606fba81ae7`) at the exact
-     `acrenzolopez01` registry.
-   - `AcrPush` (`8311e382-0749-4cb8-b61a-304f252e45ec`) and `AcrDelete`
-     (`c2f4ef07-c644-48eb-af81-4b1b4947fb11`) at that same exact registry.
-   - `Website Contributor` (`de139f84-1756-47ae-9be6-808fbbe84772`) at the exact
-     Marquee Web App.
+- `AZURE_CLIENT_ID`
+- `AZURE_TENANT_ID`
+- `AZURE_SUBSCRIPTION_ID`
+- `RESOURCE_GROUP`
+- `WEBAPP_NAME`
 
-   Do not grant RG/subscription `Reader`, `Monitoring Reader`, `Contributor`,
-   Data Importer, ACR Tasks, a matching custom role, or access through a group.
-   Before push and again before deployment, the workflow derives the signed-in
-   service principal object ID from its ARM token and validates direct and
-   inherited assignments by built-in role ID and exact scope without Microsoft
-   Graph.
-4. The existing shared ACR `acrenzolopez01.azurecr.io` with the Marquee image
-   repository `marquee`; no app-dedicated registry is used or created. The
-   existing Linux App Service must be configured to pull that repository using
-   a separate direct built-in `AcrPull`
-   (`7f951dda-4ed3-4680-a7ca-43fe172d538d`) assignment for the App Service
-   managed identity at the exact shared registry. App Service persistent storage
-   must be enabled, `WEBSITES_PORT=3001`, and scaling must be fixed at one
-   instance/process. Before this workflow may mutate the container, the
-   current rollback image must already be pinned to an exact
-   `acrenzolopez01.azurecr.io/marquee@sha256:...` digest. A foreign-registry,
-   foreign-repository, or mutable current image is rejected before deployment;
-   any one-time registry transition is an external operator prerequisite.
-5. A combined Marquee SPA/API Entra registration. Its application ID is
-   `AZURE_AD_CLIENT_ID`; its identifier URI is `api://<Marquee client id>`; its
-   delegated scope is `Marquee.User`; and its workload application roles are
-   the Watchtower read role plus Prism read and write roles documented in
-   [API_CONTRACTS.md](API_CONTRACTS.md). Configure the production SPA redirect
-   and logout URIs on this same registration. Record its
-   `accessTokenAcceptedVersion`: v2 tokens use the client-ID GUID as `aud`, while
-   v1 tokens use the identifier URI.
+`AZURE_CLIENT_ID` must identify an Entra application with a GitHub Actions OIDC
+federated credential. It needs permission to push
+`acrenzolopez01.azurecr.io/marquee` images and update the existing Marquee Web
+App. The Web App managed identity needs permission to pull the same ACR
+repository. The workflow does not create these resources or assignments.
 
-The repository does not provision or modify Azure, Entra, GitHub settings,
-environments, variables, secrets, DNS, providers, or production data.
+The existing App Service must expose port 3001 and persist `/home/data`.
 
 ## App Service settings
 
-### Startup-critical
-
-| Setting | Contract |
+| Setting | Value |
 |---|---|
-| `NODE_ENV` | `production` (baked into the image) |
-| `PORT` | `3001` (baked into the image) |
+| `WEBSITES_PORT` | `3001` |
 | `DB_PATH` | `/home/data/marquee.db` |
 | `MARQUEE_ARTIFACT_ROOT` | `/home/data/marquee-artifacts` |
-| `AZURE_AD_TENANT_ID` | Tenant used by MSAL and strict token validation |
-| `AZURE_AD_CLIENT_ID` | Combined Marquee SPA/API application ID |
-| `AZURE_AD_AUDIENCE` | Client-ID GUID for v2 tokens, or exactly `api://<Marquee client id>` for v1 tokens |
-| `ADMIN_OID` | Initial and invariant Marquee administrator object ID |
+| `AZURE_AD_TENANT_ID` | Marquee Entra tenant ID |
+| `AZURE_AD_CLIENT_ID` | Combined Marquee SPA/API client ID |
+| `AZURE_AD_AUDIENCE` | Client ID or `api://<client-id>` |
+| `ADMIN_OID` | Marquee administrator object ID |
 
-`AAD_TENANT_ID` is a deprecated compatibility alias for
-`AZURE_AD_TENANT_ID`. Do not set both. If both exist and differ, startup fails;
-all workflow and current documentation use `AZURE_AD_TENANT_ID`, the canonical
-application-consumed key. `MARQUEE_BOOTSTRAP_ADMIN_OID` is an explicit
-compatibility fallback for `ADMIN_OID`, not a second administrator.
-Startup accepts only the two audience forms belonging to the same combined
-registration. It never accepts an unrelated URI, and token validation still
-requires the configured exact audience, tenant, issuer, scope, client, and
-application role. `/api/config` reports that non-secret audience so the
-deployment agreement probe verifies the same runtime choice the API enforces.
+The combined SPA/API registration uses identifier URI
+`api://<Marquee client id>` and delegated scope `Marquee.User`.
+`WATCHTOWER_CLIENT_ID` and `PRISM_CLIENT_ID` are optional; when absent, only
+their workload endpoints return 503.
 
-The Docker image bakes immutable semantic version, source commit, workflow run
-ID, and build time into `build-metadata.json`. The runtime copy of commit and
-build ID must agree with that file or startup fails. `/version.json`,
-`/api/version`, `/api/live`, and `/api/ready` report this identity. Runtime image
-digest is omitted unless a platform supplies and explicitly marks a verified
-`MARQUEE_IMAGE_DIGEST`; the deployment workflow therefore treats the ACR/App
-Service digest as authoritative instead of claiming an unverifiable runtime
-digest.
+Provider credentials remain App Service or Key Vault settings and are never
+compiled into the browser bundle. `/api/config` exposes only the non-secret
+tenant, client, audience, and delegated scope values needed by MSAL.
 
-### Feature-gated settings and secrets
+## Delivery
 
-`WATCHTOWER_CLIENT_ID` and `PRISM_CLIENT_ID` are optional. Missing values do not
-prevent Marquee startup or user login; only the corresponding workload contract
-routes return explicit 503 responses. A present value must be a GUID. Role-name
-settings may override the documented defaults but do not weaken token
-validation.
+CI installs dependencies and builds the client and server. Deployment signs in
+to Azure with OIDC, builds a run-specific image locally on the GitHub runner,
+pushes it to the existing shared ACR, and configures the existing Web App to run
+that image. It does not modify `/home/data`.
 
-Provider settings (`PLEX_*`, `TAUTULLI_*`, `OMDB_API_KEY`, `ANTHROPIC_API_KEY`,
-`VIBE_OPENAI_*`, and `SONARR_INGEST_TOKEN`) gate their own features. Store
-provider credentials as Key Vault-backed App Service references using the
-existing managed identity. Do not put them in GitHub variables, image layers,
-or browser runtime config. Backup storage settings are required only for the
-explicit off-host recovery command.
-
-## Delivery behavior
-
-CI runs strict client/server TypeScript checks, ESLint, all tests, separate
-client and server production builds, production and complete dependency audits,
-the no-PostgreSQL/Drizzle/WAL architecture gate, and a Linux image smoke test.
-The smoke runs as the production user with explicit throwaway `/tmp` database
-and artifact paths enabled only by `CI=true` plus
-`MARQUEE_EPHEMERAL_SMOKE=true`; normal production paths must remain under
-`/home/data`.
-
-Deployment builds and pushes a run-unique
-`acrenzolopez01.azurecr.io/marquee` tag, resolves and verifies its exact digest,
-generates an SBOM, blocks high/critical fixed vulnerabilities, signs and
-attests that digest, and deploys App Service by digest. It does not create a
-registry, alter shared-registry permissions, or write app settings. Version,
-API version, liveness, readiness, database journal mode, and public runtime
-config must agree before the digest receives the repository-local `production`
-promotion tag. The canary never uses `latest`. Any failure or cancellation
-after the deploy step restores the previously captured digest-pinned image and
-restarts the app.
-
-Image construction and both tag pushes run locally on the GitHub runner:
-Buildx pushes the run-unique candidate after a local build, and
-`docker buildx imagetools create` performs the digest-preserving
-repository-local `production` tag push. The workflow never invokes ACR Tasks,
-`az acr import`, a remote registry build, or a registry-mode change.
-
-Manual rollback uses the same `az webapp config container set` digest-pinned
-operation. Backup, restore, and data recovery remain the explicit procedures in
-[RECOVERY.md](RECOVERY.md), never deployment steps.
+After deployment, the workflow reports `/api/live` and `/api/ready` status.
+Health reporting does not block the completed deployment.

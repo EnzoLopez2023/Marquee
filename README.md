@@ -28,14 +28,10 @@ The same portable image is configured at runtime: Express serves a no-store
 audience, and exact `api://<client>/Marquee.User` scope before MSAL starts. No
 browser identity setting is compiled into the Vite bundle.
 
-Validation:
+Build:
 
 ```bash
-npm run typecheck
-npm test
-npm run lint
 npm run build
-npm run check:architecture
 ```
 
 The production database authority is `/home/data/marquee.db`, always using

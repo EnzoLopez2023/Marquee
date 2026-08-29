@@ -49,7 +49,6 @@ COPY --from=build --chown=marquee:marquee /build/node_modules ./node_modules
 COPY --from=build --chown=marquee:marquee /build/package.json ./package.json
 COPY --from=build --chown=marquee:marquee /build/build-metadata.json ./build-metadata.json
 COPY --from=build --chown=marquee:marquee /build/scripts/start-production.mjs ./scripts/start-production.mjs
-COPY --from=build --chown=marquee:marquee /build/scripts/container-smoke.mjs ./scripts/container-smoke.mjs
 
 ENV NODE_ENV=production \
     PORT=3001 \

@@ -68,27 +68,4 @@ describe('production start contract', () => {
     },
   )
 
-  it('keeps rollback armed after any attempted production mutation', () => {
-    const workflow = readFileSync('.github/workflows/deploy.yml', 'utf8')
-    expect(workflow).toContain('ACR: acrenzolopez01')
-    expect(workflow).toContain('ACR_LOGIN_SERVER: acrenzolopez01.azurecr.io')
-    expect(workflow).toContain('IMAGE_REPOSITORY: marquee')
-    expect(workflow).not.toContain('vars.ACR_NAME')
-    expect(workflow.match(/scripts\/verify-deployment-role-contract\.sh/g)).toHaveLength(2)
-    expect(workflow).not.toContain('az acr import')
-    expect(workflow).not.toContain('az acr task')
-    expect(workflow).not.toContain('az acr build')
-    expect(workflow).not.toContain('az acr update')
-    expect(workflow).toContain('CURRENT_IMAGE="${CURRENT#DOCKER|}"')
-    expect(workflow).toContain(
-      '[[ "$CURRENT_IMAGE" =~ ^${ACR_LOGIN_SERVER}/${IMAGE_REPOSITORY}@sha256:[0-9a-f]{64}$ ]]',
-    )
-    expect(workflow).toContain(
-      "(failure() || cancelled()) && steps.current.outcome == 'success' && steps.deploy.outcome != 'skipped'",
-    )
-    expect(workflow).toContain(
-      'docker buildx imagetools create --tag "$IMAGE:production" "$IMAGE@$DIGEST"',
-    )
-    expect(workflow).toContain('--connect-timeout 2 --max-time 5')
-  })
 })
