@@ -74,6 +74,10 @@ describe('production start contract', () => {
     expect(workflow).toContain('ACR_LOGIN_SERVER: acrenzolopez01.azurecr.io')
     expect(workflow).toContain('IMAGE_REPOSITORY: marquee')
     expect(workflow).not.toContain('vars.ACR_NAME')
+    expect(workflow).toContain('CURRENT_IMAGE="${CURRENT#DOCKER|}"')
+    expect(workflow).toContain(
+      '[[ "$CURRENT_IMAGE" =~ ^${ACR_LOGIN_SERVER}/${IMAGE_REPOSITORY}@sha256:[0-9a-f]{64}$ ]]',
+    )
     expect(workflow).toContain(
       "(failure() || cancelled()) && steps.current.outcome == 'success' && steps.deploy.outcome != 'skipped'",
     )

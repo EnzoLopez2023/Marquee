@@ -162,9 +162,10 @@ jobs:
             --resource-group "$RESOURCE_GROUP" \
             --name "$WEBAPP_NAME" \
             --query "[?name=='DOCKER_CUSTOM_IMAGE_NAME'].value | [0]" -o tsv)"
-          [[ "$CURRENT" =~ @sha256:[0-9a-f]{64}$ ]] \
-            || { echo "::error::Current production image is not digest-pinned; refusing an unrollbackable deploy"; exit 1; }
-          echo "image=$CURRENT" >> "$GITHUB_OUTPUT"
+          CURRENT_IMAGE="${CURRENT#DOCKER|}"
+          [[ "$CURRENT_IMAGE" =~ ^${ACR_LOGIN_SERVER}/${IMAGE_REPOSITORY}@sha256:[0-9a-f]{64}$ ]] \
+            || { echo "::error::Current production image is not a shared-ACR Marquee digest; refusing an unrollbackable deploy"; exit 1; }
+          echo "image=$CURRENT_IMAGE" >> "$GITHUB_OUTPUT"
 
       - name: Deploy exact digest
         id: deploy

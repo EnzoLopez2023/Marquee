@@ -27,7 +27,11 @@ configure these outside this repository:
    existing Linux App Service must be configured to pull that repository using
    its established managed-identity registry access. App Service persistent
    storage must be enabled, `WEBSITES_PORT=3001`, and scaling must be fixed at
-   one instance/process.
+   one instance/process. Before this workflow may mutate the container, the
+   current rollback image must already be pinned to an exact
+   `acrenzolopez01.azurecr.io/marquee@sha256:...` digest. A foreign-registry,
+   foreign-repository, or mutable current image is rejected before deployment;
+   any one-time registry transition is an external operator prerequisite.
 5. A combined Marquee SPA/API Entra registration. Its application ID is
    `AZURE_AD_CLIENT_ID`; its identifier URI is `api://<Marquee client id>`; its
    delegated scope is `Marquee.User`; and its workload application roles are
