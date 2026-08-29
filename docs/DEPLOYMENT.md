@@ -19,15 +19,29 @@ configure these outside this repository:
    `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `WEBAPP_NAME`, and
    `RESOURCE_GROUP`.
 3. An Entra federated credential on `AZURE_CLIENT_ID` whose subject matches this
-   repository and protected environment, plus only `AcrPush` access to the
-   existing shared registry and the App Service deployment permissions it
-   needs.
+   repository and protected environment. Give that service principal only these
+   direct built-in role assignments:
+   - `Reader` (`acdd72a7-3385-48ef-bd42-f606fba81ae7`) at the exact
+     `acrenzolopez01` registry.
+   - `AcrPush` (`8311e382-0749-4cb8-b61a-304f252e45ec`) and `AcrDelete`
+     (`c2f4ef07-c644-48eb-af81-4b1b4947fb11`) at that same exact registry.
+   - `Website Contributor` (`de139f84-1756-47ae-9be6-808fbbe84772`) at the exact
+     Marquee Web App.
+
+   Do not grant RG/subscription `Reader`, `Monitoring Reader`, `Contributor`,
+   Data Importer, ACR Tasks, a matching custom role, or access through a group.
+   Before push and again before deployment, the workflow derives the signed-in
+   service principal object ID from its ARM token and validates direct and
+   inherited assignments by built-in role ID and exact scope without Microsoft
+   Graph.
 4. The existing shared ACR `acrenzolopez01.azurecr.io` with the Marquee image
    repository `marquee`; no app-dedicated registry is used or created. The
    existing Linux App Service must be configured to pull that repository using
-   its established managed-identity registry access. App Service persistent
-   storage must be enabled, `WEBSITES_PORT=3001`, and scaling must be fixed at
-   one instance/process. Before this workflow may mutate the container, the
+   a separate direct built-in `AcrPull`
+   (`7f951dda-4ed3-4680-a7ca-43fe172d538d`) assignment for the App Service
+   managed identity at the exact shared registry. App Service persistent storage
+   must be enabled, `WEBSITES_PORT=3001`, and scaling must be fixed at one
+   instance/process. Before this workflow may mutate the container, the
    current rollback image must already be pinned to an exact
    `acrenzolopez01.azurecr.io/marquee@sha256:...` digest. A foreign-registry,
    foreign-repository, or mutable current image is rejected before deployment;
@@ -114,6 +128,12 @@ config must agree before the digest receives the repository-local `production`
 promotion tag. The canary never uses `latest`. Any failure or cancellation
 after the deploy step restores the previously captured digest-pinned image and
 restarts the app.
+
+Image construction and both tag pushes run locally on the GitHub runner:
+Buildx pushes the run-unique candidate after a local build, and
+`docker buildx imagetools create` performs the digest-preserving
+repository-local `production` tag push. The workflow never invokes ACR Tasks,
+`az acr import`, a remote registry build, or a registry-mode change.
 
 Manual rollback uses the same `az webapp config container set` digest-pinned
 operation. Backup, restore, and data recovery remain the explicit procedures in
