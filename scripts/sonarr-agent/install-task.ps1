@@ -133,9 +133,13 @@ $tempConfigPath = "$configPath.new"
 $stream = $null
 $writer = $null
 try {
-  $stream = [System.IO.FileStream]::new(
-    $tempConfigPath,
-    [System.IO.FileMode]::Create,
+  if (Test-Path $tempConfigPath) {
+    throw "Candidate config path already exists: $tempConfigPath"
+  }
+  Add-Type -AssemblyName System.IO.FileSystem.AccessControl
+  $stream = [System.IO.FileSystemAclExtensions]::Create(
+    [System.IO.FileInfo]::new($tempConfigPath),
+    [System.IO.FileMode]::CreateNew,
     [System.Security.AccessControl.FileSystemRights]::Write,
     [System.IO.FileShare]::None,
     4096,

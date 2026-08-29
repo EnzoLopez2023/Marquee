@@ -7,7 +7,7 @@ describe('Sonarr installer secret handling', () => {
     const script = readFileSync('scripts/sonarr-agent/install-task.ps1', 'utf8')
     expect(script).not.toContain('Copy-Item $configPath')
     expect(script).not.toContain('$configPath.bak')
-    const secureCreate = script.indexOf('[System.IO.FileStream]::new')
+    const secureCreate = script.indexOf('[System.IO.FileSystemAclExtensions]::Create')
     const candidateCheck = script.indexOf('& $node $script --check --config $tempConfigPath')
     const atomicMove = script.indexOf('Move-Item $tempConfigPath $configPath -Force')
     expect(secureCreate).toBeGreaterThan(0)
@@ -15,6 +15,7 @@ describe('Sonarr installer secret handling', () => {
     expect(candidateCheck).toBeLessThan(atomicMove)
     expect(atomicMove).toBeGreaterThan(secureCreate)
     expect(script).toContain('$acl.SetAccessRuleProtection($true, $false)')
+    expect(script).toContain('[System.IO.FileMode]::CreateNew')
     expect(script).toContain('The active config was not changed')
   })
 
@@ -44,6 +45,8 @@ describe('Sonarr installer secret handling', () => {
     const script = readFileSync('scripts/sonarr-agent/install-task.ps1', 'utf8')
     const validation = script.indexOf("Normalize-MarqueeUrl ([string] $config['marqueeUrl'])")
     expect(validation).toBeGreaterThan(0)
-    expect(validation).toBeLessThan(script.indexOf('[System.IO.FileStream]::new'))
+    expect(validation).toBeLessThan(
+      script.indexOf('[System.IO.FileSystemAclExtensions]::Create'),
+    )
   })
 })
