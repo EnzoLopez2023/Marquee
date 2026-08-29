@@ -29,15 +29,21 @@ The existing App Service must expose port 3001 and persist `/home/data`.
 | `WEBSITES_PORT` | `3001` |
 | `DB_PATH` | `/home/data/marquee.db` |
 | `MARQUEE_ARTIFACT_ROOT` | `/home/data/marquee-artifacts` |
-| `AZURE_AD_TENANT_ID` | Marquee Entra tenant ID |
-| `AZURE_AD_CLIENT_ID` | Combined Marquee SPA/API client ID |
-| `AZURE_AD_AUDIENCE` | Client ID or `api://<client-id>` |
-| `ADMIN_OID` | Marquee administrator object ID |
+| `AZURE_AD_TENANT_ID` | Optional Marquee Entra tenant ID |
+| `AZURE_AD_CLIENT_ID` | Optional combined Marquee SPA/API client ID |
+| `AZURE_AD_AUDIENCE` | Optional client ID or `api://<client-id>` |
+| `ADMIN_OID` | Optional Marquee administrator object ID |
 
-The combined SPA/API registration uses identifier URI
+Identity integrations are deferred when unavailable and do not block process
+startup, `/version.json`, `/api/version`, `/api/live`, or `/api/ready`. Missing
+user-login configuration makes `/api/config`, protected user APIs, and the
+sign-in UI explicitly unavailable with HTTP 503 behavior. Missing `ADMIN_OID`
+makes admin APIs unavailable. Missing `WATCHTOWER_CLIENT_ID` or
+`PRISM_CLIENT_ID` makes only that workload's contract endpoints unavailable.
+Configured IDs remain strictly validated.
+
+When configured, the combined SPA/API registration uses identifier URI
 `api://<Marquee client id>` and delegated scope `Marquee.User`.
-`WATCHTOWER_CLIENT_ID` and `PRISM_CLIENT_ID` are optional; when absent, only
-their workload endpoints return 503.
 
 Provider credentials remain App Service or Key Vault settings and are never
 compiled into the browser bundle. `/api/config` exposes only the non-secret

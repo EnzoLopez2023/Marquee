@@ -30,18 +30,9 @@ describe('production start contract', () => {
     expect(backend).toContain("userScope: 'Marquee.User'")
   })
 
-  it('rejects a production start without runtime Entra values', () => {
-    const env = { ...process.env }
-    delete env.NODE_ENV
-    delete env.AZURE_AD_TENANT_ID
-    delete env.AZURE_AD_CLIENT_ID
-    const result = spawnSync(process.execPath, ['scripts/start-production.mjs'], {
-      cwd: process.cwd(),
-      env,
-      encoding: 'utf8',
-    })
-    expect(result.status).not.toBe(0)
-    expect(`${result.stdout}${result.stderr}`).toContain(
+  it('does not make Entra registration values a wrapper startup requirement', () => {
+    const wrapper = readFileSync('scripts/start-production.mjs', 'utf8')
+    expect(wrapper).not.toContain(
       'Production runtime Entra tenant/client configuration is missing or invalid',
     )
   })
