@@ -45,4 +45,27 @@ describe('production start contract', () => {
       'Production runtime Entra tenant/client configuration is missing or invalid',
     )
   })
+
+  it.each(['WATCHTOWER_CLIENT_ID', 'PRISM_CLIENT_ID'])(
+    'rejects a malformed optional %s before loading the application',
+    (name) => {
+      const env = {
+        ...process.env,
+        AZURE_AD_TENANT_ID: '52188f12-db6b-46c6-88ff-08c802f0ed3b',
+        AZURE_AD_CLIENT_ID: '11111111-1111-4111-8111-111111111111',
+        [name]: 'malformed',
+      }
+      delete env.NODE_ENV
+      const result = spawnSync(process.execPath, ['scripts/start-production.mjs'], {
+        cwd: process.cwd(),
+        env,
+        encoding: 'utf8',
+      })
+      expect(result.status).not.toBe(0)
+      expect(`${result.stdout}${result.stderr}`).toContain(
+        `${name} must be a GUID when configured`,
+      )
+    },
+  )
+
 })

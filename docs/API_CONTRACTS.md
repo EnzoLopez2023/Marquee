@@ -6,6 +6,13 @@ distinct configured client IDs and endpoint-specific application roles. They
 never expose provider credentials, URLs, media file paths, raw Sonarr
 snapshots, or another application's database.
 
+`WATCHTOWER_CLIENT_ID` and `PRISM_CLIENT_ID` are independent, optional feature
+dependencies. If one is absent, only that consumer's routes return HTTP 503
+with `{"error":{"code":"WORKLOAD_IDENTITY_NOT_CONFIGURED","dependency":"..."}}`.
+If configured, each ID must be a GUID and the existing exact audience, issuer,
+client ID, delegated-token rejection, and application-role checks remain in
+force.
+
 ## Watchtower
 
 `GET /api/contracts/v1/media-health`

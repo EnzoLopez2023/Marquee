@@ -6,8 +6,8 @@ import { config, validateConfig } from './config.js'
 validateConfig()
 const database = openDatabase()
 const app = createApp(database)
-const server = app.listen(config.port, () => {
-  console.log(`Marquee running on http://localhost:${config.port}`)
+const server = app.listen(config.port, config.host, () => {
+  console.log(`Marquee running on http://${config.host}:${config.port}`)
 })
 
 let stopping = false

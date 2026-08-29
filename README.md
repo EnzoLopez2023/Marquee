@@ -19,19 +19,18 @@ npm run dev
 ```
 
 `npm start` is production-only: it refuses a non-production `NODE_ENV`, requires
-the built client/server artifacts, uses `/home/data/marquee.db`, and runs full
+trusted image-baked build identity plus the built client/server artifacts, uses
+`/home/data/marquee.db`, validates writable persistent storage, and runs full
 production configuration validation.
 
 The same portable image is configured at runtime: Express serves a no-store
-`/runtime-config.js` containing only the validated Entra tenant, client, and
-exact `api://<client>/Marquee.User` scope before the frontend bundle starts.
+`/api/config` response containing only the validated Entra tenant, client,
+audience, and exact `api://<client>/Marquee.User` scope before MSAL starts. No
+browser identity setting is compiled into the Vite bundle.
 
-Validation:
+Build:
 
 ```bash
-npm run typecheck
-npm test
-npm run lint
 npm run build
 ```
 
@@ -42,5 +41,6 @@ explicit operator commands and never run during startup or requests.
 See [source lineage](docs/SOURCE_LINEAGE.md),
 [approved import](docs/IMPORT.md), [API contracts](docs/API_CONTRACTS.md),
 [recovery](docs/RECOVERY.md),
+[deployment](docs/DEPLOYMENT.md),
 [Plex TLS policy](docs/PLEX_TLS.md), and the
 [parity checklist](docs/PARITY_CHECKLIST.md).
