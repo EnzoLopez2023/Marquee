@@ -16,14 +16,18 @@ configure these outside this repository:
 1. A protected GitHub `production` environment with required reviewers as
    appropriate.
 2. Repository or `production` environment variables `AZURE_CLIENT_ID`,
-   `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `ACR_NAME`, `WEBAPP_NAME`, and
+   `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `WEBAPP_NAME`, and
    `RESOURCE_GROUP`.
 3. An Entra federated credential on `AZURE_CLIENT_ID` whose subject matches this
-   repository and protected environment, plus only the existing ACR push and
-   App Service deployment permissions it needs.
-4. An existing ACR and Linux App Service configured to pull from it. App Service
-   persistent storage must be enabled, `WEBSITES_PORT=3001`, and scaling must be
-   fixed at one instance/process.
+   repository and protected environment, plus only `AcrPush` access to the
+   existing shared registry and the App Service deployment permissions it
+   needs.
+4. The existing shared ACR `acrenzolopez01.azurecr.io` with the Marquee image
+   repository `marquee`; no app-dedicated registry is used or created. The
+   existing Linux App Service must be configured to pull that repository using
+   its established managed-identity registry access. App Service persistent
+   storage must be enabled, `WEBSITES_PORT=3001`, and scaling must be fixed at
+   one instance/process.
 5. A combined Marquee SPA/API Entra registration. Its application ID is
    `AZURE_AD_CLIENT_ID`; its identifier URI is `api://<Marquee client id>`; its
    delegated scope is `Marquee.User`; and its workload application roles are
@@ -96,14 +100,16 @@ and artifact paths enabled only by `CI=true` plus
 `MARQUEE_EPHEMERAL_SMOKE=true`; normal production paths must remain under
 `/home/data`.
 
-Deployment builds and pushes a run-unique ACR tag, resolves and verifies its
-exact digest, generates an SBOM, blocks high/critical fixed vulnerabilities,
-signs and attests that digest, and deploys App Service by digest. It does not
-write app settings. Version, API version, liveness, readiness, database journal
-mode, and public runtime config must agree before the digest receives the
-`production` promotion tag. The canary never uses `latest`. Any failure or
-cancellation after the deploy step restores the previously captured
-digest-pinned image and restarts the app.
+Deployment builds and pushes a run-unique
+`acrenzolopez01.azurecr.io/marquee` tag, resolves and verifies its exact digest,
+generates an SBOM, blocks high/critical fixed vulnerabilities, signs and
+attests that digest, and deploys App Service by digest. It does not create a
+registry, alter shared-registry permissions, or write app settings. Version,
+API version, liveness, readiness, database journal mode, and public runtime
+config must agree before the digest receives the repository-local `production`
+promotion tag. The canary never uses `latest`. Any failure or cancellation
+after the deploy step restores the previously captured digest-pinned image and
+restarts the app.
 
 Manual rollback uses the same `az webapp config container set` digest-pinned
 operation. Backup, restore, and data recovery remain the explicit procedures in

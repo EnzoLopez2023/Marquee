@@ -11,7 +11,9 @@ permissions:
   attestations: write
 
 env:
-  IMAGE_NAME: marquee
+  ACR: acrenzolopez01
+  ACR_LOGIN_SERVER: acrenzolopez01.azurecr.io
+  IMAGE_REPOSITORY: marquee
 
 jobs:
   validate:
@@ -34,7 +36,6 @@ jobs:
           AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
           AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
           AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-          ACR_NAME: ${{ vars.ACR_NAME }}
           WEBAPP_NAME: ${{ vars.WEBAPP_NAME }}
           RESOURCE_GROUP: ${{ vars.RESOURCE_GROUP }}
         run: |
@@ -42,7 +43,6 @@ jobs:
           test -n "$AZURE_CLIENT_ID" || { echo "::error::AZURE_CLIENT_ID is required"; exit 1; }
           test -n "$AZURE_TENANT_ID" || { echo "::error::AZURE_TENANT_ID is required"; exit 1; }
           test -n "$AZURE_SUBSCRIPTION_ID" || { echo "::error::AZURE_SUBSCRIPTION_ID is required"; exit 1; }
-          test -n "$ACR_NAME" || { echo "::error::ACR_NAME is required"; exit 1; }
           test -n "$WEBAPP_NAME" || { echo "::error::WEBAPP_NAME is required"; exit 1; }
           test -n "$RESOURCE_GROUP" || { echo "::error::RESOURCE_GROUP is required"; exit 1; }
 
@@ -54,19 +54,17 @@ jobs:
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
       - name: ACR login
-        run: az acr login --name "${{ vars.ACR_NAME }}"
+        run: az acr login --name "$ACR"
 
       - name: Compute immutable image metadata
         id: meta
-        env:
-          ACR_NAME: ${{ vars.ACR_NAME }}
         run: |
           set -euo pipefail
           PACKAGE_VERSION="$(node -p "require('./package.json').version")"
           VERSION="${PACKAGE_VERSION%%+*}+run.${GITHUB_RUN_NUMBER}"
           BUILD_ID="${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}"
           TAG="run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_SHA::12}"
-          echo "image=${ACR_NAME}.azurecr.io/${IMAGE_NAME}:${TAG}" >> "$GITHUB_OUTPUT"
+          echo "image=${ACR_LOGIN_SERVER}/${IMAGE_REPOSITORY}:${TAG}" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "build_id=$BUILD_ID" >> "$GITHUB_OUTPUT"
           echo "build_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
@@ -89,14 +87,13 @@ jobs:
 
       - name: Verify exact ACR digest
         env:
-          ACR_NAME: ${{ vars.ACR_NAME }}
           IMAGE: ${{ steps.meta.outputs.image }}
           DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           set -euo pipefail
           REMOTE_DIGEST="$(az acr repository show \
-            --name "$ACR_NAME" \
-            --image "${IMAGE#*.azurecr.io/}" \
+            --name "$ACR" \
+            --image "${IMAGE#${ACR_LOGIN_SERVER}/}" \
             --query digest -o tsv)"
           test "$REMOTE_DIGEST" = "$DIGEST"
 
@@ -134,7 +131,7 @@ jobs:
       - name: Attest exact image provenance
         uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661
         with:
-          subject-name: ${{ vars.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}
+          subject-name: ${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_REPOSITORY }}
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
 
@@ -174,14 +171,14 @@ jobs:
         env:
           RESOURCE_GROUP: ${{ vars.RESOURCE_GROUP }}
           WEBAPP_NAME: ${{ vars.WEBAPP_NAME }}
-          IMAGE: ${{ vars.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}@${{ needs.build-and-push.outputs.digest }}
+          IMAGE: ${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_REPOSITORY }}@${{ needs.build-and-push.outputs.digest }}
         run: |
           set -euo pipefail
           az webapp config container set \
             --resource-group "$RESOURCE_GROUP" \
             --name "$WEBAPP_NAME" \
             --container-image-name "$IMAGE" \
-            --container-registry-url "https://${{ vars.ACR_NAME }}.azurecr.io"
+            --container-registry-url "https://${ACR_LOGIN_SERVER}"
           az webapp restart --resource-group "$RESOURCE_GROUP" --name "$WEBAPP_NAME"
 
       - name: Probe deployed identity and health agreement
@@ -223,15 +220,15 @@ jobs:
 
       - name: Promote verified digest
         env:
-          IMAGE: ${{ vars.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}
+          IMAGE: ${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_REPOSITORY }}
           DIGEST: ${{ needs.build-and-push.outputs.digest }}
         run: |
           set -euo pipefail
-          az acr login --name "${{ vars.ACR_NAME }}"
+          az acr login --name "$ACR"
           docker buildx imagetools create --tag "$IMAGE:production" "$IMAGE@$DIGEST"
           PROMOTED_DIGEST="$(az acr repository show \
-            --name "${{ vars.ACR_NAME }}" \
-            --image "${IMAGE#*.azurecr.io/}:production" \
+            --name "$ACR" \
+            --image "${IMAGE#${ACR_LOGIN_SERVER}/}:production" \
             --query digest -o tsv)"
           test "$PROMOTED_DIGEST" = "$DIGEST"
 
@@ -247,5 +244,5 @@ jobs:
             --resource-group "$RESOURCE_GROUP" \
             --name "$WEBAPP_NAME" \
             --container-image-name "$PREVIOUS_IMAGE" \
-            --container-registry-url "https://${{ vars.ACR_NAME }}.azurecr.io"
+            --container-registry-url "https://${ACR_LOGIN_SERVER}"
           az webapp restart --resource-group "$RESOURCE_GROUP" --name "$WEBAPP_NAME"

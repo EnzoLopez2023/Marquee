@@ -70,6 +70,10 @@ describe('production start contract', () => {
 
   it('keeps rollback armed after any attempted production mutation', () => {
     const workflow = readFileSync('.github/workflows/deploy.yml', 'utf8')
+    expect(workflow).toContain('ACR: acrenzolopez01')
+    expect(workflow).toContain('ACR_LOGIN_SERVER: acrenzolopez01.azurecr.io')
+    expect(workflow).toContain('IMAGE_REPOSITORY: marquee')
+    expect(workflow).not.toContain('vars.ACR_NAME')
     expect(workflow).toContain(
       "(failure() || cancelled()) && steps.current.outcome == 'success' && steps.deploy.outcome != 'skipped'",
     )
