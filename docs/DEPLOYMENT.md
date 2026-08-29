@@ -51,10 +51,11 @@ tenant, client, audience, and delegated scope values needed by MSAL.
 
 ## Delivery
 
-CI installs dependencies and builds the client and server. Deployment signs in
-to Azure with OIDC, builds a run-specific image locally on the GitHub runner,
-pushes it to the existing shared ACR, and configures the existing Web App to run
-that image. It does not modify `/home/data`.
+The delivery workflow installs dependencies and builds the client and server.
+For pushes to `main` and manual runs, its deployment job signs in to Azure with
+OIDC, builds a run-specific image locally on the GitHub runner, pushes it to the
+existing shared ACR, and configures the existing Web App to run that image. It
+does not modify `/home/data`.
 
 After deployment, the workflow reports `/api/live` and `/api/ready` status.
 Health reporting does not block the completed deployment.
