@@ -52,7 +52,8 @@ export async function plexFetch(
     throw new Error('Plex request host is not allowed')
   }
   url.searchParams.set('X-Plex-Token', config.plex.token)
-  if (options.accept !== 'xml' && options.accept !== 'image') {
+  const acceptsJson = options.accept !== 'xml' && options.accept !== 'image'
+  if (acceptsJson) {
     url.searchParams.set('X-Plex-Container-Format', 'json')
   }
   const body = options.formData && !(options.formData instanceof URLSearchParams)
@@ -62,6 +63,7 @@ export async function plexFetch(
   return fetch(url, {
     method: options.method || 'GET',
     body,
+    headers: acceptsJson ? { Accept: 'application/json' } : undefined,
     dispatcher: plexDispatcher,
     signal: options.signal || AbortSignal.timeout(TIMEOUT_MS),
   } as RequestInit & { dispatcher: Agent })
