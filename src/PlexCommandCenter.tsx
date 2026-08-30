@@ -4,6 +4,7 @@ import { CARD_RADIUS, PAGE_GUTTER, pageShellSx } from './theme/controls'
 import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react'
 import { useThemeMode } from './context/ThemeContext'
 import { tokensFor } from './theme/tokens'
+import { raisedCardShadow } from './theme/elevation'
 import { withAlpha } from './theme/contrast'
 
 const PlexUsers = lazy(() => import('./components/PlexUsers'))
@@ -73,8 +74,8 @@ function useC() {
       background: `linear-gradient(180deg, ${t.paper} 0%, ${t.surface} 100%)`,
       border: `1px solid ${border}`,
       boxShadow: d
-        ? `inset 0 1px 0 ${withAlpha(t.champagne, 0.10)}`
-        : 'inset 0 1px 0 rgba(255,255,255,0.85)',
+        ? `inset 0 1px 0 ${withAlpha(t.champagne, 0.10)}, ${raisedCardShadow(true)}`
+        : `inset 0 1px 0 rgba(255,255,255,0.85), ${raisedCardShadow(false)}`,
       transition: 'box-shadow 0.22s, border-color 0.18s, transform 0.18s',
     } as const,
     cardHoverSx: {

@@ -1,3 +1,5 @@
+import { raisedCardShadow } from './elevation';
+
 export interface HearthTokens {
   bg: string;
   paper: string;
@@ -31,6 +33,6 @@ export function tokensFor(isDark: boolean, _palette?: unknown): HearthTokens {
     blue: isDark ? '#7fb8ff' : '#1769b0',
     purple: isDark ? '#c4a1ff' : '#7049a8',
     border: colors.line,
-    cardSx: { bgcolor: colors.paper, border: `1px solid ${colors.line}`, boxShadow: isDark ? '0 12px 28px rgba(0,0,0,.18)' : '0 10px 24px rgba(21,35,61,.08)' },
+    cardSx: { bgcolor: colors.paper, border: `1px solid ${colors.line}`, boxShadow: raisedCardShadow(isDark) },
   };
 }
