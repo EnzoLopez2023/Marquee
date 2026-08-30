@@ -315,9 +315,15 @@ export default function PlexMovieInsights() {
       logger.debug(`Found ${movieLibraries.length} movie libraries`)
       setLibraries(movieLibraries)
       if (movieLibraries.length > 0) setSelectedLibrary(movieLibraries[0].key)
+      // Nothing to load movies for — release the movie spinner so the empty
+      // state can render instead of a permanent "loading library…".
+      else setLoading(false)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch libraries')
       logger.error('Error fetching libraries:', err)
+      // fetchMovies() never runs when the library list fails, so clear its
+      // spinner here or the error/retry UI stays hidden behind it forever.
+      setLoading(false)
     } finally {
       setLoadingLibraries(false)
     }

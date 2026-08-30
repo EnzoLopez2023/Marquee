@@ -288,7 +288,7 @@ export default function PlaylistBuilderDialog({ open, onClose }: PlaylistBuilder
       onClose={loading ? undefined : onClose}
       maxWidth="lg"
       fullWidth
-      slotProps={{ paper: { sx: { borderRadius: 2, minHeight: '70vh' } } }}
+      slotProps={{ paper: { sx: { borderRadius: '14px', minHeight: '70vh' } } }}
     >
       <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1.5, pr: 6 }}>
         <PlaylistAddIcon color="primary" />
@@ -462,7 +462,7 @@ export default function PlaylistBuilderDialog({ open, onClose }: PlaylistBuilder
                   overflowY: 'auto',
                   border: '1px solid',
                   borderColor: 'divider',
-                  borderRadius: 1,
+                  borderRadius: '6px',
                   p: 1,
                   backgroundColor: 'action.hover',
                   fontFamily: 'monospace',
