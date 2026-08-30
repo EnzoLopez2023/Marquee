@@ -29,7 +29,13 @@ export function createIosTheme(mode: 'light' | 'dark'): Theme {
         paper: dark ? '#182234' : '#ffffff',
       },
     },
-    shape: { borderRadius: IOS_RADIUS },
+    // `shape.borderRadius` is the MULTIPLIER MUI applies to numeric `borderRadius`
+    // values in the `sx` prop (`sx={{ borderRadius: 8 }}` -> 8 * base). This app
+    // consistently passes real pixel values there (CARD_RADIUS = 14, progress
+    // bars = 99, …), so the base has to stay 1 or every corner blows up ~14x.
+    // The 14px "squircle" geometry is applied explicitly in the component
+    // styleOverrides below instead.
+    shape: { borderRadius: 1 },
     typography: {
       fontFamily: SF_STACK,
       h1: { letterSpacing: '-0.021em', fontWeight: 700 },
@@ -90,6 +96,14 @@ export function createIosTheme(mode: 'light' | 'dark'): Theme {
         styleOverrides: { root: { borderRadius: 10, textTransform: 'none' } },
       },
       MuiChip: {
+        styleOverrides: { root: { borderRadius: 10 } },
+      },
+      // Inputs and alerts derive their radius from `shape.borderRadius`, which is
+      // now 1, so restore an explicit squircle for them.
+      MuiOutlinedInput: {
+        styleOverrides: { root: { borderRadius: 10 } },
+      },
+      MuiAlert: {
         styleOverrides: { root: { borderRadius: 10 } },
       },
       MuiDrawer: {

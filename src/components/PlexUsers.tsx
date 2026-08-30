@@ -54,7 +54,7 @@ interface TautulliUser {
   user_id:          number
   username:         string
   friendly_name:    string
-  thumb:            string          // plex.tv CDN URL
+  thumb:            string | null   // plex.tv CDN URL (null when the user has no avatar)
   is_active:        number
   last_seen:        number | null   // unix seconds
   last_played:      string | null
@@ -160,16 +160,17 @@ function tautulliImg(thumb: string, w = 150, h = 225) {
 }
 
 function UserAvatar({ thumb, name, size = 40, C }: {
-  thumb: string; name: string; size?: number; C: ReturnType<typeof useC>
+  thumb: string | null; name: string; size?: number; C: ReturnType<typeof useC>
 }) {
   const [err, setErr] = useState(false)
   const initial = (name || '?')[0].toUpperCase()
-  const proxyableThumb = thumb.startsWith('/library/') || thumb.startsWith('/playlists/')
+  const proxyableThumb = !!thumb
+    && (thumb.startsWith('/library/') || thumb.startsWith('/playlists/'))
   if (proxyableThumb && !err) {
     return (
       <Box sx={{ width: size, height: size, borderRadius: '50%', overflow: 'hidden', flexShrink: 0 }}>
         <AuthenticatedImage
-          source={tautulliImg(thumb, size, size)}
+          source={tautulliImg(thumb as string, size, size)}
           alt={name}
           width={size}
           height={size}
