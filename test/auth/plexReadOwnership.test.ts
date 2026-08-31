@@ -30,7 +30,13 @@ describe('Plex read ownership and path minimization', () => {
       title: 'Movie',
       Media: [{ Part: [{ file: 'P:\\secret\\movie.mkv', size: 10 }] }],
       nested: { file_path: '/secret/movie.mkv', safe: true },
-      Location: [{ path: 'P:\\Movies' }],
+      Directory: [{
+        key: '9',
+        title: 'Movies',
+        type: 'movie',
+        Location: [{ path: 'P:\\Movies' }],
+      }],
+      directory: '/secret/library',
       message: 'Found /private/media/movie.mkv',
       ordinary: 'GET /api/v3/series succeeded',
     })
@@ -38,7 +44,12 @@ describe('Plex read ownership and path minimization', () => {
       title: 'Movie',
       Media: [{ Part: [{ size: 10 }] }],
       nested: { safe: true },
-      Location: [{}],
+      Directory: [{
+        key: '9',
+        title: 'Movies',
+        type: 'movie',
+        Location: [{}],
+      }],
       message: '[redacted filesystem path]',
       ordinary: 'GET /api/v3/series succeeded',
     })
