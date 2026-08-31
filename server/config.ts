@@ -49,8 +49,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
       userScope: 'Marquee.User',
       workloads: {
         watchtower: {
+          tenantId: guidEnv(env.WATCHTOWER_WORKLOAD_TENANT_ID),
+          audience: (env.WATCHTOWER_WORKLOAD_AUDIENCE || '').trim(),
           clientId: guidEnv(env.WATCHTOWER_CLIENT_ID),
-          role: env.WATCHTOWER_APP_ROLE || 'Marquee.Watchtower.MediaHealth.Read',
+          role: (env.WATCHTOWER_APP_ROLE || 'Marquee.Watchtower.MediaHealth.Read').trim(),
         },
         prism: {
           clientId: guidEnv(env.PRISM_CLIENT_ID),
@@ -102,6 +104,7 @@ export function validateConfig(
     ['AZURE_AD_CLIENT_ID', candidate.entra.clientId],
     ['ADMIN_OID', candidate.entra.adminOid],
     ['MARQUEE_BOOTSTRAP_ADMIN_OID', candidate.entra.bootstrapAdminOid],
+    ['WATCHTOWER_WORKLOAD_TENANT_ID', candidate.entra.workloads.watchtower.tenantId],
     ['WATCHTOWER_CLIENT_ID', candidate.entra.workloads.watchtower.clientId],
     ['PRISM_CLIENT_ID', candidate.entra.workloads.prism.clientId],
   ]) {
@@ -200,7 +203,7 @@ export function publicConfigSummary() {
       sonarrIngest: Boolean(config.sonarrIngestToken),
     },
     contracts: {
-      watchtower: Boolean(config.entra.workloads.watchtower.clientId),
+      watchtower: watchtowerWorkloadConfigured(config),
       prism: Boolean(config.entra.workloads.prism.clientId),
     },
     transport: { plex: plexTransport },
@@ -215,6 +218,14 @@ export function userAuthenticationConfigured(candidate: MarqueeConfig = config) 
       candidate.entra.clientId,
       `api://${candidate.entra.clientId}`,
     ]).has(candidate.entra.audience)
+}
+
+export function watchtowerWorkloadConfigured(candidate: MarqueeConfig = config) {
+  const watchtower = candidate.entra.workloads.watchtower
+  return guid.test(watchtower.tenantId)
+    && Boolean(watchtower.audience)
+    && guid.test(watchtower.clientId)
+    && Boolean(watchtower.role)
 }
 
 export function adminIdentityConfigured(candidate: MarqueeConfig = config) {

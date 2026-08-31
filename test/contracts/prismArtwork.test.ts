@@ -2,6 +2,7 @@ import express from 'express'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../../server/auth/serviceTokens.js', () => ({
+  requireWatchtower: () => (_req: any, _res: any, next: any) => next(),
   requireWorkload: () => (_req: any, _res: any, next: any) => next(),
 }))
 const mocks = vi.hoisted(() => ({

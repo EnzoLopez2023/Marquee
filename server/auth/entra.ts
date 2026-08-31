@@ -1,16 +1,23 @@
-import { createRemoteJWKSet, jwtVerify, type JWTPayload } from 'jose'
+import {
+  createRemoteJWKSet,
+  jwtVerify,
+  type JWTPayload,
+  type JWTVerifyGetKey,
+} from 'jose'
 import { config } from '../config.js'
 
 const guid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
-let jwks: ReturnType<typeof createRemoteJWKSet> | null = null
+const keySets = new Map<string, JWTVerifyGetKey>()
 
-function keySet() {
+function keySet(tenantId: string) {
+  let jwks = keySets.get(tenantId)
   if (!jwks) {
-    if (!config.entra.tenantId) throw new Error('Entra authentication is not configured')
+    if (!tenantId) throw new Error('Entra authentication is not configured')
     jwks = createRemoteJWKSet(new URL(
-      `https://login.microsoftonline.com/${config.entra.tenantId}/discovery/v2.0/keys`,
+      `https://login.microsoftonline.com/${tenantId}/discovery/v2.0/keys`,
     ))
+    keySets.set(tenantId, jwks)
   }
   return jwks
 }
@@ -20,18 +27,27 @@ export interface VerifiedClaims extends JWTPayload {
   tid: string
 }
 
-export async function verifyAccessToken(token: string): Promise<VerifiedClaims> {
-  const { payload } = await jwtVerify(token, keySet(), {
+export interface TokenAuthority {
+  tenantId: string
+  audience: string
+}
+
+export async function verifyAccessTokenForAuthority(
+  token: string,
+  authority: TokenAuthority,
+  verificationKey: JWTVerifyGetKey = keySet(authority.tenantId),
+): Promise<VerifiedClaims> {
+  const { payload } = await jwtVerify(token, verificationKey, {
     issuer: [
-      `https://login.microsoftonline.com/${config.entra.tenantId}/v2.0`,
-      `https://sts.windows.net/${config.entra.tenantId}/`,
+      `https://login.microsoftonline.com/${authority.tenantId}/v2.0`,
+      `https://sts.windows.net/${authority.tenantId}/`,
     ],
-    audience: config.entra.audience,
+    audience: authority.audience,
     clockTolerance: 60,
   })
   if (
     typeof payload.tid !== 'string'
-    || payload.tid.toLowerCase() !== config.entra.tenantId
+    || payload.tid.toLowerCase() !== authority.tenantId
     || typeof payload.oid !== 'string'
     || !guid.test(payload.oid)
     || !guid.test(payload.tid)
@@ -43,6 +59,13 @@ export async function verifyAccessToken(token: string): Promise<VerifiedClaims> 
     tid: payload.tid.toLowerCase(),
     oid: payload.oid.toLowerCase(),
   } as VerifiedClaims
+}
+
+export async function verifyAccessToken(token: string): Promise<VerifiedClaims> {
+  return verifyAccessTokenForAuthority(token, {
+    tenantId: config.entra.tenantId,
+    audience: config.entra.audience,
+  })
 }
 
 export function assertDelegatedUserClaims(claims: VerifiedClaims): VerifiedClaims {
