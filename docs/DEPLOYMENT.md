@@ -33,6 +33,10 @@ The existing App Service must expose port 3001 and persist `/home/data`.
 | `AZURE_AD_CLIENT_ID` | Optional combined Marquee SPA/API client ID |
 | `AZURE_AD_AUDIENCE` | Optional client ID or `api://<client-id>` |
 | `ADMIN_OID` | Optional Marquee administrator object ID |
+| `WATCHTOWER_WORKLOAD_TENANT_ID` | Compute tenant that issues Watchtower managed-identity tokens |
+| `WATCHTOWER_WORKLOAD_AUDIENCE` | Exact audience of the Marquee workload API registration |
+| `WATCHTOWER_CLIENT_ID` | Watchtower managed identity application/client ID |
+| `WATCHTOWER_APP_ROLE` | `Marquee.Watchtower.MediaHealth.Read` |
 
 Identity integrations are deferred when unavailable and do not block process
 startup, `/version.json`, `/api/version`, `/api/live`, or `/api/ready`. Missing
@@ -41,6 +45,14 @@ sign-in UI explicitly unavailable with HTTP 503 behavior. Missing `ADMIN_OID`
 makes admin APIs unavailable. Missing `WATCHTOWER_CLIENT_ID` or
 `PRISM_CLIENT_ID` makes only that workload's contract endpoints unavailable.
 Configured IDs remain strictly validated.
+
+The Watchtower route additionally requires its workload tenant and audience.
+These values are intentionally separate from the user-facing Marquee
+registration: a managed-identity token is verified against its compute tenant
+and workload API audience, while browser tokens continue to use
+`AZURE_AD_TENANT_ID` and `AZURE_AD_AUDIENCE`. The workload resource service
+principal must expose `Marquee.Watchtower.MediaHealth.Read` to applications,
+and the Watchtower managed identity must have that app-role assignment.
 
 When configured, the combined SPA/API registration uses identifier URI
 `api://<Marquee client id>` and delegated scope `Marquee.User`.
