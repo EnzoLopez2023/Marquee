@@ -2,15 +2,16 @@ import express from 'express'
 import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('../../server/auth/serviceTokens.js', () => ({
-  requireWorkload: () => (req: any, res: any, next: any) => (
-    req.get('authorization') === 'Bearer workload-test-token'
-      ? next()
-      : res.status(401).json({ error: { code: 'INVALID_WORKLOAD_TOKEN' } })
-  ),
+  requireWatchtower: () => (_req: any, _res: any, next: any) => next(),
+  requireWorkload: () => (_req: any, _res: any, next: any) => next(),
 }))
 
-import { createContractsV1Router } from '../../server/routes/contractsV1.js'
-import { sonarrCollectionStatus } from '../../server/routes/contractsV1.js'
+import { SCHEMA_VERSION } from '../../lib/db/migrate.js'
+import { SOURCE } from '../../lib/health/buildIdentity.js'
+import {
+  createContractsV1Router,
+  sonarrCollectionStatus,
+} from '../../server/routes/contractsV1.js'
 import { temporaryDatabase, withServer } from '../helpers.js'
 
 describe('Watchtower media health contract', () => {
@@ -29,29 +30,74 @@ describe('Watchtower media health contract', () => {
     })).toBe('unavailable')
   })
 
-  it('is token-gated, compact, read-only, and versioned', async () => {
+  it('emits the exact compact shape consumed by Watchtower', async () => {
     const handle = temporaryDatabase()
+    const sampledAt = Date.now()
+    const plexObservedAt = Date.parse('2026-08-28T05:37:30.000Z')
+    const tautulliObservedAt = Date.parse('2026-08-28T05:37:00.000Z')
     handle.db.prepare(`
       INSERT INTO sonarr_summary(id, sampled_at, received_at, poll_minutes, payload)
       VALUES (1, ?, ?, 2, ?)
-    `).run(Date.now(), Date.now(), JSON.stringify({
+    `).run(sampledAt, sampledAt, JSON.stringify({
       metrics: { seriesCount: 416, queueCount: 0, missingCount: 2, healthIssueCount: 0 },
       pipeline: { grabbed24h: 1, imported24h: 1, failed24h: 0 },
       collection: { endpointCount: 10, healthyEndpointCount: 10, failedEndpointCount: 0 },
     }))
+    handle.db.prepare(`
+      INSERT INTO provider_health(provider, observed_at, status, latency_ms, sanitized_error)
+      VALUES ('plex', ?, 'ok', 34, NULL), ('tautulli', ?, 'ok', 25, NULL)
+    `).run(plexObservedAt, tautulliObservedAt)
     const app = express().use(express.json()).use(createContractsV1Router(handle.db))
     try {
       await withServer(app, async (url) => {
-        expect((await fetch(`${url}/api/contracts/v1/media-health`)).status).toBe(401)
-        const response = await fetch(`${url}/api/contracts/v1/media-health`, {
-          headers: { Authorization: 'Bearer workload-test-token' },
-        })
+        const response = await fetch(`${url}/api/contracts/v1/media-health`)
         expect(response.status).toBe(200)
+        expect((await fetch(`${url}/api/contracts/v1/media-health`, {
+          method: 'POST',
+        })).status).toBe(404)
         const data = await response.json() as any
-        expect(data.schema).toBe('marquee.media-health.v1')
-        expect(data.sonarr.metrics.seriesCount).toBe(416)
+        expect(data).toEqual({
+          schema: 'marquee.media-health.v1',
+          generatedAt: expect.any(String),
+          overall: 'healthy',
+          build: SOURCE,
+          sqlite: { ready: true, schemaVersion: SCHEMA_VERSION },
+          providers: {
+            plex: {
+              configured: false,
+              lastSuccessAt: '2026-08-28T05:37:30.000Z',
+              lastFailureAt: null,
+              latencyMs: 34,
+            },
+            tautulli: {
+              configured: false,
+              lastSuccessAt: '2026-08-28T05:37:00.000Z',
+              lastFailureAt: null,
+              latencyMs: 25,
+            },
+          },
+          sonarr: {
+            present: true,
+            freshness: 'fresh',
+            sampledAt,
+            receivedAt: sampledAt,
+            cadenceMs: 120_000,
+            series: 416,
+            queue: 0,
+            missing: 2,
+            healthy: 10,
+            pipeline: 'healthy',
+          },
+          duplicates: {
+            lastScanAt: null,
+            successfulDeleteCount: 0,
+            bytesSaved: 0,
+            latestDeleteOutcomeAt: null,
+          },
+        })
         expect(JSON.stringify(data)).not.toContain('payload')
         expect(JSON.stringify(data)).not.toContain('file_path')
+        expect(response.headers.get('cache-control')).toBe('no-store')
 
         handle.db.prepare(`
           UPDATE sonarr_summary SET payload = ? WHERE id = 1
@@ -60,10 +106,8 @@ describe('Watchtower media health contract', () => {
           pipeline: {},
           collection: { endpointCount: 10, healthyEndpointCount: 9, failedEndpointCount: 1 },
         }))
-        const degraded = await fetch(`${url}/api/contracts/v1/media-health`, {
-          headers: { Authorization: 'Bearer workload-test-token' },
-        })
-        expect((await degraded.json() as any).status).toBe('degraded')
+        const degraded = await fetch(`${url}/api/contracts/v1/media-health`)
+        expect((await degraded.json() as any).overall).toBe('degraded')
       })
     } finally {
       handle.cleanup()

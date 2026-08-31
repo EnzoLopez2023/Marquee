@@ -1,7 +1,18 @@
 import { timingSafeEqual } from 'node:crypto'
 import type { NextFunction, Request, Response } from 'express'
-import { assertWorkloadClaims, verifyAccessToken } from './entra.js'
-import { config, userAuthenticationConfigured } from '../config.js'
+import {
+  assertWorkloadClaims,
+  verifyAccessToken,
+  verifyAccessTokenForAuthority,
+  type TokenAuthority,
+  type VerifiedClaims,
+} from './entra.js'
+import {
+  config,
+  userAuthenticationConfigured,
+  watchtowerWorkloadConfigured,
+  type MarqueeConfig,
+} from '../config.js'
 
 const bearer = (req: Request) => {
   const auth = req.get('authorization') || ''
@@ -9,13 +20,11 @@ const bearer = (req: Request) => {
 }
 
 export function requireWorkload(
-  consumer: 'watchtower' | 'prism',
+  consumer: 'prism',
   permission: 'read' | 'write',
 ) {
   return async (req: Request, res: Response, next: NextFunction) => {
-    const clientId = consumer === 'watchtower'
-      ? config.entra.workloads.watchtower.clientId
-      : config.entra.workloads.prism.clientId
+    const clientId = config.entra.workloads.prism.clientId
     if (!clientId || !userAuthenticationConfigured()) {
       return res.status(503).json({
         error: {
@@ -26,17 +35,52 @@ export function requireWorkload(
     }
     const token = bearer(req)
     if (!token) return res.status(401).json({ error: { code: 'WORKLOAD_TOKEN_REQUIRED' } })
-    const role = consumer === 'watchtower'
-      ? config.entra.workloads.watchtower.role
-      : permission === 'write'
-        ? config.entra.workloads.prism.writeRole
-        : config.entra.workloads.prism.readRole
+    const role = permission === 'write'
+      ? config.entra.workloads.prism.writeRole
+      : config.entra.workloads.prism.readRole
     try {
       assertWorkloadClaims(await verifyAccessToken(token), clientId, role)
       req.serviceConsumer = consumer
       return next()
     } catch (error) {
       console.warn('Workload access token rejected:', error instanceof Error ? error.message : String(error))
+      return res.status(401).json({ error: { code: 'INVALID_WORKLOAD_TOKEN' } })
+    }
+  }
+}
+
+type WorkloadVerifier = (
+  token: string,
+  authority: TokenAuthority,
+) => Promise<VerifiedClaims>
+
+export function requireWatchtower(
+  candidate: MarqueeConfig = config,
+  verify: WorkloadVerifier = verifyAccessTokenForAuthority,
+) {
+  return async (req: Request, res: Response, next: NextFunction) => {
+    if (!watchtowerWorkloadConfigured(candidate)) {
+      return res.status(503).json({
+        error: {
+          code: 'WORKLOAD_IDENTITY_NOT_CONFIGURED',
+          dependency: 'watchtower',
+        },
+      })
+    }
+    const token = bearer(req)
+    if (!token) return res.status(401).json({ error: { code: 'WORKLOAD_TOKEN_REQUIRED' } })
+
+    const workload = candidate.entra.workloads.watchtower
+    try {
+      const claims = await verify(token, {
+        tenantId: workload.tenantId,
+        audience: workload.audience,
+      })
+      assertWorkloadClaims(claims, workload.clientId, workload.role)
+      req.serviceConsumer = 'watchtower'
+      return next()
+    } catch (error) {
+      console.warn('Watchtower access token rejected:', error instanceof Error ? error.message : String(error))
       return res.status(401).json({ error: { code: 'INVALID_WORKLOAD_TOKEN' } })
     }
   }

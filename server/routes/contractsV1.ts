@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type Database from 'better-sqlite3'
 import { Router } from 'express'
-import { requireWorkload } from '../auth/serviceTokens.js'
+import { requireWatchtower, requireWorkload } from '../auth/serviceTokens.js'
 import { plexFetch, plexJson } from '../clients/plex.js'
 import { SOURCE } from '../../lib/health/buildIdentity.js'
 import { SCHEMA_VERSION } from '../../lib/db/migrate.js'
@@ -13,7 +13,7 @@ import {
   canonicalPlexId,
   requireCanonicalPlexId,
 } from '../domain/media/plexId.js'
-import { config } from '../config.js'
+import { config, type MarqueeConfig } from '../config.js'
 import { plexTlsMode } from '../domain/media/plexTls.js'
 
 interface MutationPayload {
@@ -34,6 +34,129 @@ export function sonarrCollectionStatus(summary: any): 'healthy' | 'degraded' | '
   if (failed > 0 && healthy === 0) return 'unavailable'
   if (failed > 0) return 'degraded'
   return 'healthy'
+}
+
+interface ProviderHealthRow {
+  provider: string
+  observed_at: number
+  status: 'ok' | 'error'
+  latency_ms: number | null
+}
+
+interface SonarrSummaryRow {
+  sampled_at: number
+  received_at: number
+  poll_minutes: number
+  payload: string
+}
+
+interface DuplicateSummaryRow {
+  last_scan_at: number | null
+  last_delete_at: number | null
+  delete_count: number | null
+  bytes_saved: number | null
+}
+
+const objectRecord = (value: unknown): Record<string, unknown> => (
+  value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {}
+)
+
+const count = (value: unknown) => {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? Math.max(0, Math.round(parsed)) : 0
+}
+
+const isoTimestamp = (value: unknown) => {
+  if (value === null || value === undefined) return null
+  const date = new Date(Number(value))
+  return Number.isFinite(date.getTime()) ? date.toISOString() : null
+}
+
+export function mediaHealthV1(
+  db: Database.Database,
+  candidate: MarqueeConfig = config,
+  now = Date.now(),
+) {
+  const providerRows = db.prepare(
+    'SELECT provider, observed_at, status, latency_ms FROM provider_health ORDER BY provider',
+  ).all() as ProviderHealthRow[]
+  const providerByName = new Map(providerRows.map((provider) => [provider.provider, provider]))
+  const provider = (name: 'plex' | 'tautulli', configured: boolean) => {
+    const observation = providerByName.get(name)
+    const observedAt = observation ? isoTimestamp(observation.observed_at) : null
+    const latency = observation?.latency_ms
+    return {
+      configured,
+      lastSuccessAt: observation?.status === 'ok' ? observedAt : null,
+      lastFailureAt: observation?.status === 'error' ? observedAt : null,
+      latencyMs: typeof latency === 'number' && Number.isFinite(latency) && latency >= 0
+        ? latency
+        : null,
+    }
+  }
+  const providers = {
+    plex: provider('plex', Boolean(candidate.plex.token)),
+    tautulli: provider('tautulli', Boolean(candidate.tautulli.apiKey)),
+  }
+  const sonarr = db.prepare(
+    'SELECT sampled_at, received_at, poll_minutes, payload FROM sonarr_summary WHERE id = 1',
+  ).get() as SonarrSummaryRow | undefined
+  const duplicate = db.prepare(`
+    SELECT
+      MAX(CASE WHEN action = 'scan' AND status = 'success' THEN ts END) AS last_scan_at,
+      MAX(CASE WHEN action = 'delete' THEN ts END) AS last_delete_at,
+      SUM(CASE WHEN action = 'delete' AND status = 'success' THEN 1 ELSE 0 END) AS delete_count,
+      COALESCE(SUM(CASE WHEN action = 'delete' AND status = 'success' THEN file_size ELSE 0 END), 0) AS bytes_saved
+    FROM plex_action_log
+  `).get() as DuplicateSummaryRow
+  const sonarrSummary = sonarr ? objectRecord(JSON.parse(sonarr.payload)) : {}
+  const sonarrStatus = sonarrCollectionStatus(sonarrSummary)
+  const stale = sonarr
+    ? now - sonarr.received_at > Math.max(10 * 60_000, sonarr.poll_minutes * 180_000)
+    : true
+  const metrics = objectRecord(sonarrSummary.metrics)
+  const pipeline = objectRecord(sonarrSummary.pipeline)
+  const collection = objectRecord(sonarrSummary.collection)
+  const pipelineStatus = sonarrStatus === 'unavailable'
+    ? 'unavailable'
+    : sonarrStatus === 'degraded' || count(pipeline.failed24h) > 0
+      ? 'degraded'
+      : 'healthy'
+  const providerError = providerRows.some((observation) => observation.status === 'error')
+  const plexTransport = plexTlsMode(candidate.plex.baseUrl, candidate.plex.tls)
+  const overall = !sonarr || sonarrStatus === 'unavailable' ? 'unavailable'
+    : stale || providerError || plexTransport.degraded || sonarrStatus === 'degraded'
+      ? 'degraded'
+      : 'healthy'
+
+  return {
+    schema: 'marquee.media-health.v1' as const,
+    generatedAt: new Date(now).toISOString(),
+    overall,
+    build: SOURCE,
+    sqlite: { ready: true, schemaVersion: SCHEMA_VERSION },
+    providers,
+    sonarr: sonarr ? {
+      present: true,
+      freshness: stale ? 'stale' : 'fresh',
+      sampledAt: sonarr.sampled_at,
+      receivedAt: sonarr.received_at,
+      cadenceMs: sonarr.poll_minutes * 60_000,
+      series: count(metrics.seriesCount),
+      queue: count(metrics.queueCount),
+      missing: count(metrics.missingCount),
+      healthy: count(collection.healthyEndpointCount),
+      pipeline: pipelineStatus,
+    } : { present: false },
+    duplicates: {
+      lastScanAt: isoTimestamp(duplicate.last_scan_at),
+      successfulDeleteCount: count(duplicate.delete_count),
+      bytesSaved: count(duplicate.bytes_saved),
+      latestDeleteOutcomeAt: isoTimestamp(duplicate.last_delete_at),
+    },
+  }
 }
 
 export function createContractsV1Router(db: Database.Database) {
@@ -63,54 +186,9 @@ export function createContractsV1Router(db: Database.Database) {
     WHERE status = 'executing'
   `).run()
 
-  router.get('/api/contracts/v1/media-health', requireWorkload('watchtower', 'read'), (_req, res) => {
-    const providers = db.prepare(
-      'SELECT provider, observed_at, status, latency_ms, sanitized_error FROM provider_health ORDER BY provider',
-    ).all()
-    const sonarr = db.prepare(
-      'SELECT sampled_at, received_at, poll_minutes, payload FROM sonarr_summary WHERE id = 1',
-    ).get() as any
-    const duplicate = db.prepare(`
-      SELECT
-        MAX(CASE WHEN action = 'scan' AND status = 'success' THEN ts END) AS last_scan_at,
-        MAX(CASE WHEN action = 'delete' THEN ts END) AS last_delete_at,
-        SUM(CASE WHEN action = 'delete' AND status = 'success' THEN 1 ELSE 0 END) AS delete_count,
-        COALESCE(SUM(CASE WHEN action = 'delete' AND status = 'success' THEN file_size ELSE 0 END), 0) AS bytes_saved
-      FROM plex_action_log
-    `).get() as any
-    const sonarrSummary = sonarr ? JSON.parse(sonarr.payload) : null
-    const sonarrStatus = sonarrCollectionStatus(sonarrSummary)
-    const stale = sonarr
-      ? Date.now() - sonarr.received_at > Math.max(10 * 60_000, sonarr.poll_minutes * 180_000)
-      : true
-    const providerError = (providers as any[]).some((provider) => provider.status === 'error')
-    const plexTransport = plexTlsMode(config.plex.baseUrl, config.plex.tls)
-    res.json({
-      schema: 'marquee.media-health.v1',
-      generatedAt: new Date().toISOString(),
-      source: SOURCE,
-      status: !sonarr || sonarrStatus === 'unavailable' ? 'unavailable'
-        : stale || providerError || plexTransport.degraded || sonarrStatus === 'degraded'
-          ? 'degraded' : 'healthy',
-      database: { ready: true, schemaVersion: SCHEMA_VERSION },
-      providers,
-      transport: { plex: plexTransport },
-      sonarr: sonarr ? {
-        present: true,
-        stale,
-        sampledAt: sonarr.sampled_at,
-        receivedAt: sonarr.received_at,
-        expectedCadenceSeconds: sonarr.poll_minutes * 60,
-        status: sonarrStatus,
-        ...sonarrSummary,
-      } : { present: false, stale: true },
-      duplicates: {
-        lastScanAt: duplicate.last_scan_at,
-        lastDeleteAt: duplicate.last_delete_at,
-        successfulDeletes: Number(duplicate.delete_count) || 0,
-        bytesSaved: Number(duplicate.bytes_saved) || 0,
-      },
-    })
+  router.get('/api/contracts/v1/media-health', requireWatchtower(), (_req, res) => {
+    res.set('Cache-Control', 'no-store')
+    res.json(mediaHealthV1(db))
   })
 
   router.get('/api/contracts/v1/media/search', requireWorkload('prism', 'read'), async (req, res) => {
