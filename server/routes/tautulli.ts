@@ -2,6 +2,7 @@ import { Router } from 'express'
 import { anthropic } from '../clients/anthropic.js'
 import { tautulliApi } from '../clients/tautulli.js'
 import { config } from '../config.js'
+import { isPlexArtworkPath } from '../domain/media/sanitize.js'
 import {
   cancelResponseBody,
   readBoundedResponseBody,
@@ -11,24 +12,7 @@ const router = Router()
 const unavailable = (res: any) => res.status(503).json({ error: 'Tautulli not configured' })
 const message = (error: unknown) => error instanceof Error ? error.message : String(error)
 const query = (value: unknown, fallback: string) => typeof value === 'string' ? value : fallback
-const TAUTULLI_IMAGE_PATHS = [
-  /^\/library\/metadata\/[1-9]\d*\/(?:thumb|art)(?:\/[1-9]\d*)?$/,
-  /^\/library\/collections\/[1-9]\d*\/(?:thumb|art)(?:\/[1-9]\d*)?$/,
-  /^\/playlists\/[1-9]\d*\/composite(?:\/[1-9]\d*)?$/,
-]
-
-export function isAllowedTautulliImagePath(value: string) {
-  if (
-    !value.startsWith('/')
-    || value.startsWith('//')
-    || value.includes('\\')
-    || value.includes('..')
-    || value.includes('?')
-    || value.includes('#')
-    || /^[a-z][a-z0-9+.-]*:/i.test(value)
-  ) return false
-  return TAUTULLI_IMAGE_PATHS.some((pattern) => pattern.test(value))
-}
+export const isAllowedTautulliImagePath = isPlexArtworkPath
 
 export function boundedImageDimension(value: unknown, fallback: number) {
   const text = typeof value === 'string' ? value : String(value ?? '')

@@ -54,4 +54,21 @@ describe('Plex read ownership and path minimization', () => {
       ordinary: 'GET /api/v3/series succeeded',
     })
   })
+
+  it('preserves canonical Plex artwork routes without exposing arbitrary paths', () => {
+    expect(sanitizeMediaPaths({
+      thumb: '/library/metadata/12/thumb/123',
+      art: '/library/metadata/12/art',
+      collectionThumb: '/library/collections/8/thumb/456',
+      playlistComposite: '/playlists/4/composite/789',
+      invalidArtwork: '/library/metadata/not-an-id/thumb/private',
+      filesystemPath: '/private/media/poster.jpg',
+    })).toEqual({
+      thumb: '/library/metadata/12/thumb/123',
+      art: '/library/metadata/12/art',
+      collectionThumb: '/library/collections/8/thumb/456',
+      playlistComposite: '/playlists/4/composite/789',
+      invalidArtwork: '[redacted filesystem path]',
+    })
+  })
 })

@@ -2,8 +2,10 @@ import { lazy, Suspense, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { Box, Button, CircularProgress, CssBaseline, Drawer, IconButton, List, ListItemButton, ListItemText, Stack, ThemeProvider, Typography } from '@mui/material';
+import type { Theme } from '@mui/material/styles';
 import { useThemeMode } from './context/ThemeContext';
 import { useUserPermissions } from './context/UserPermissionsContext';
+import { raisedCardShadow } from './theme/elevation';
 import { createIosTheme } from './theme/iosTheme';
 
 const PlexLibrary = lazy(() => import('./PlexMovieInsights'));
@@ -12,6 +14,17 @@ const Sonarr = lazy(() => import('./SonarrDashboard'));
 const AdminPage = lazy(() => import('./AdminPage'));
 
 const SIDEBAR_WIDTH = 248;
+const SIDEBAR_INSET = 16;
+const SIDEBAR_RADIUS = 20;
+
+const sidebarSurfaceSx = {
+  boxSizing: 'border-box',
+  border: '1px solid',
+  borderColor: 'divider',
+  borderRadius: SIDEBAR_RADIUS,
+  boxShadow: (theme: Theme) => raisedCardShadow(theme.palette.mode === 'dark'),
+  overflow: 'hidden',
+} as const;
 
 const NAV = [
   { to: '/plex/library', label: 'Library', feature: 'plex-library' },
@@ -74,9 +87,16 @@ function AppShell({ children }: { children: ReactNode }) {
         variant="permanent"
         sx={{
           display: { xs: 'none', md: 'block' },
-          width: SIDEBAR_WIDTH,
+          width: SIDEBAR_WIDTH + SIDEBAR_INSET * 2,
           flexShrink: 0,
-          '& .MuiDrawer-paper': { width: SIDEBAR_WIDTH, boxSizing: 'border-box' },
+          '& .MuiDrawer-paper': {
+            ...sidebarSurfaceSx,
+            width: SIDEBAR_WIDTH,
+            top: SIDEBAR_INSET,
+            bottom: SIDEBAR_INSET,
+            left: SIDEBAR_INSET,
+            height: 'auto',
+          },
         }}
       >
         <SidebarContent />
@@ -88,7 +108,14 @@ function AppShell({ children }: { children: ReactNode }) {
         ModalProps={{ keepMounted: true }}
         sx={{
           display: { xs: 'block', md: 'none' },
-          '& .MuiDrawer-paper': { width: SIDEBAR_WIDTH, boxSizing: 'border-box' },
+          '& .MuiDrawer-paper': {
+            ...sidebarSurfaceSx,
+            width: `min(${SIDEBAR_WIDTH}px, calc(100vw - ${SIDEBAR_INSET * 2}px))`,
+            top: SIDEBAR_INSET,
+            bottom: SIDEBAR_INSET,
+            left: SIDEBAR_INSET,
+            height: 'auto',
+          },
         }}
       >
         <SidebarContent onNavigate={() => setMobileOpen(false)} />
@@ -97,7 +124,7 @@ function AppShell({ children }: { children: ReactNode }) {
         aria-label="Open navigation"
         onClick={() => setMobileOpen(true)}
         sx={{
-          display: { xs: 'inline-flex', md: 'none' },
+          display: { xs: mobileOpen ? 'none' : 'inline-flex', md: 'none' },
           position: 'fixed',
           top: 12,
           left: 12,
