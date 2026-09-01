@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   fetchBrowserRuntimeConfig,
+  RuntimeConfigError,
   validateRuntimeConfig,
 } from '../../src/auth/runtimeConfig.js'
 
@@ -44,6 +45,20 @@ describe('frontend runtime configuration', () => {
     await expect(fetchBrowserRuntimeConfig(fetcher as typeof fetch)).resolves.toEqual(expected)
     await expect(fetchBrowserRuntimeConfig(
       (async () => new Response(null, { status: 503 })) as typeof fetch,
-    )).rejects.toThrow('unavailable (503)')
+    )).rejects.toMatchObject({
+      code: 'RUNTIME_CONFIG_UNAVAILABLE',
+      status: 503,
+    } satisfies Partial<RuntimeConfigError>)
+    await expect(fetchBrowserRuntimeConfig(
+      (async () => new Response(JSON.stringify({
+        error: { code: 'USER_LOGIN_NOT_CONFIGURED' },
+      }), {
+        status: 503,
+        headers: { 'Content-Type': 'application/json' },
+      })) as typeof fetch,
+    )).rejects.toMatchObject({
+      code: 'USER_LOGIN_NOT_CONFIGURED',
+      status: 503,
+    } satisfies Partial<RuntimeConfigError>)
   })
 })

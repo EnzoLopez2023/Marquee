@@ -1,9 +1,15 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import Database from 'better-sqlite3'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { openDatabase } from '../../lib/db/connection.js'
+import {
+  acquireAuthorityTransitionLock,
+  acquireInstanceLifetimeLock,
+  authorityTransitionLockPath,
+  instanceLifetimeLockPath,
+} from '../../lib/db/authorityTransitionLock.js'
 import { readiness } from '../../lib/health/readiness.js'
 import { temporaryDatabase } from '../helpers.js'
 
@@ -60,6 +66,136 @@ describe('SQLite authority', () => {
     expect(second.instanceLeaseHealthy()).toBe(true)
     second.close()
     rmSync(directory, { recursive: true, force: true })
+  })
+
+  it('reclaims a lifetime lock only after its durable instance lease expires', () => {
+    const directory = mkdtempSync(path.join(tmpdir(), 'marquee-stale-instance-'))
+    const databasePath = path.join(directory, 'marquee.db')
+    const initial = openDatabase(databasePath)
+    initial.close()
+    const staleOwner = new Database(databasePath)
+    staleOwner.prepare(`
+      INSERT INTO runtime_instance_lease(
+        id, owner_id, acquired_at, heartbeat_at, expires_at
+      ) VALUES (1, 'stale-owner', ?, ?, ?)
+    `).run(Date.now() - 120_000, Date.now() - 120_000, Date.now() - 60_000)
+    staleOwner.close()
+    mkdirSync(instanceLifetimeLockPath(databasePath), { mode: 0o700 })
+
+    const recovered = openDatabase(databasePath)
+    expect(recovered.instanceLeaseHealthy()).toBe(true)
+    expect(recovered.instanceId).not.toBe('stale-owner')
+    recovered.close()
+    rmSync(directory, { recursive: true, force: true })
+  })
+
+  it('restores a displaced lifetime lock when database startup fails', () => {
+    const directory = mkdtempSync(path.join(tmpdir(), 'marquee-stale-rollback-'))
+    const databasePath = path.join(directory, 'marquee.db')
+    const initial = openDatabase(databasePath)
+    initial.close()
+    const staleOwner = new Database(databasePath)
+    staleOwner.exec('DROP INDEX idx_sonarr_metrics_sampled')
+    staleOwner.prepare(`
+      INSERT INTO runtime_instance_lease(
+        id, owner_id, acquired_at, heartbeat_at, expires_at
+      ) VALUES (1, 'stale-owner', ?, ?, ?)
+    `).run(Date.now() - 120_000, Date.now() - 120_000, Date.now() - 60_000)
+    staleOwner.close()
+    const lockPath = instanceLifetimeLockPath(databasePath)
+    mkdirSync(lockPath, { mode: 0o700 })
+
+    expect(() => openDatabase(databasePath)).toThrow('schema object manifest')
+    expect(existsSync(lockPath)).toBe(true)
+    expect(existsSync(`${lockPath}.stale`)).toBe(false)
+    rmSync(directory, { recursive: true, force: true })
+  })
+
+  it('keeps a replacement lock when the displaced owner releases late', () => {
+    const directory = mkdtempSync(path.join(tmpdir(), 'marquee-lock-owner-'))
+    const databasePath = path.join(directory, 'marquee.db')
+    const first = acquireInstanceLifetimeLock(databasePath, 'first', () => true)
+    const replacement = acquireInstanceLifetimeLock(databasePath, 'replacement', () => true)
+    replacement.commitReclamation()
+
+    first.release()
+    expect(existsSync(instanceLifetimeLockPath(databasePath))).toBe(true)
+    replacement.release()
+    expect(existsSync(instanceLifetimeLockPath(databasePath))).toBe(false)
+    rmSync(directory, { recursive: true, force: true })
+  })
+
+  it('reclaims only expired startup transition locks', () => {
+    const directory = mkdtempSync(path.join(tmpdir(), 'marquee-transition-'))
+    const databasePath = path.join(directory, 'marquee.db')
+    const now = Date.now()
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now)
+    try {
+      const first = acquireAuthorityTransitionLock(databasePath, {
+        ownerId: 'first',
+        reclaimAfterMs: 1_000,
+        canReclaim: () => true,
+      })
+      expect(() => acquireAuthorityTransitionLock(databasePath, {
+        ownerId: 'early',
+        reclaimAfterMs: 1_000,
+        canReclaim: () => true,
+      })).toThrow('authority transition')
+
+      clock.mockReturnValue(now + 1_001)
+      const replacement = acquireAuthorityTransitionLock(databasePath, {
+        ownerId: 'replacement',
+        reclaimAfterMs: 1_000,
+        canReclaim: () => true,
+      })
+      first.release()
+      expect(existsSync(authorityTransitionLockPath(databasePath))).toBe(true)
+      replacement.release()
+    } finally {
+      clock.mockRestore()
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('reclaims an expired legacy startup transition lock', () => {
+    const directory = mkdtempSync(path.join(tmpdir(), 'marquee-legacy-transition-'))
+    const databasePath = path.join(directory, 'marquee.db')
+    const lockPath = authorityTransitionLockPath(databasePath)
+    const now = Date.now()
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now)
+    mkdirSync(lockPath, { mode: 0o700 })
+    try {
+      clock.mockReturnValue(now + 30_001)
+      const replacement = acquireAuthorityTransitionLock(databasePath, {
+        ownerId: 'replacement',
+        reclaimAfterMs: 30_000,
+        legacyReclaimAfterMs: 30_000,
+        canReclaim: () => true,
+      })
+      replacement.release()
+      expect(existsSync(lockPath)).toBe(false)
+    } finally {
+      clock.mockRestore()
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('does not resurrect an expired durable lease', async () => {
+    vi.useFakeTimers()
+    const directory = mkdtempSync(path.join(tmpdir(), 'marquee-expired-lease-'))
+    const databasePath = path.join(directory, 'marquee.db')
+    const startedAt = Date.now()
+    vi.setSystemTime(startedAt)
+    const handle = openDatabase(databasePath)
+    try {
+      vi.setSystemTime(startedAt + 60_001)
+      await vi.advanceTimersByTimeAsync(20_000)
+      expect(handle.instanceLeaseHealthy()).toBe(false)
+    } finally {
+      handle.close()
+      vi.useRealTimers()
+      rmSync(directory, { recursive: true, force: true })
+    }
   })
 
   it('actively fences and notifies when instance lease ownership is lost', () => {

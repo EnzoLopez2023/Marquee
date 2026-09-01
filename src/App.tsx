@@ -1,10 +1,12 @@
-import { lazy, Suspense, useMemo, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link, Navigate, Route, Routes, useLocation } from 'react-router-dom';
-import { Box, Button, CircularProgress, CssBaseline, Drawer, IconButton, List, ListItemButton, ListItemText, Stack, ThemeProvider, Typography } from '@mui/material';
+import { Avatar, Box, Button, CircularProgress, CssBaseline, Drawer, IconButton, List, ListItemButton, ListItemText, Skeleton, Stack, ThemeProvider, Typography } from '@mui/material';
 import type { Theme } from '@mui/material/styles';
+import { useMsal } from '@azure/msal-react';
 import { useThemeMode } from './context/ThemeContext';
 import { useUserPermissions } from './context/UserPermissionsContext';
+import { fetchAppVersion } from './services/appVersion';
 import { raisedCardShadow } from './theme/elevation';
 import { createIosTheme } from './theme/iosTheme';
 
@@ -44,11 +46,51 @@ function MenuGlyph() {
   </Box>;
 }
 
-function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
+type AppVersionState =
+  | { status: 'loading' }
+  | { status: 'ready'; version: string }
+  | { status: 'error' };
+
+function accountInitials(label: string) {
+  const value = label.includes('@') ? label.split('@')[0] : label;
+  return value
+    .split(/[\s._-]+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map(part => part[0])
+    .join('')
+    .toUpperCase() || 'M';
+}
+
+function SidebarContent({
+  appVersion,
+  onNavigate,
+}: {
+  appVersion: AppVersionState;
+  onNavigate?: () => void;
+}) {
   const location = useLocation();
   const { isHidden } = useUserPermissions();
   const { mode, toggleMode } = useThemeMode();
+  const { accounts, instance } = useMsal();
+  const [signOutState, setSignOutState] = useState<'idle' | 'pending' | 'error'>('idle');
   const items = NAV.filter(n => !('feature' in n) || !isHidden(n.feature));
+  const account = instance.getActiveAccount() ?? accounts[0];
+  const username = account?.username.trim() ?? '';
+  const displayName = account?.name?.trim() || username || 'Signed in';
+  const accountDetail = username && username !== displayName ? username : null;
+  const signOut = async () => {
+    if (signOutState === 'pending') return;
+    setSignOutState('pending');
+    try {
+      await instance.logoutRedirect({
+        ...(account ? { account } : {}),
+        postLogoutRedirectUri: window.location.origin,
+      });
+    } catch {
+      setSignOutState('error');
+    }
+  };
   return (
     <Stack sx={{ height: '100%', px: 1.5, py: 2 }}>
       <Typography
@@ -75,12 +117,98 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
           <ListItemText primary={mode === 'dark' ? 'Light appearance' : 'Dark appearance'} slotProps={{ primary: { fontSize: 14, color: 'text.secondary' } }} />
         </ListItemButton>
       </List>
+      <Box sx={{ borderTop: '1px solid', borderColor: 'divider', mx: 0.25, mt: 1, pt: 1.25 }}>
+        <Stack
+          aria-label="Signed-in account"
+          direction="row"
+          spacing={1.1}
+          sx={{ alignItems: 'center', minWidth: 0, px: 1, py: 0.5 }}
+        >
+          <Avatar
+            aria-hidden
+            sx={{
+              bgcolor: 'action.selected',
+              color: 'primary.main',
+              fontSize: 12,
+              fontWeight: 800,
+              height: 32,
+              width: 32,
+            }}
+          >
+            {accountInitials(displayName)}
+          </Avatar>
+          <Box sx={{ minWidth: 0 }}>
+            <Typography
+              noWrap
+              title={displayName}
+              sx={{ color: 'text.primary', fontSize: 13.5, fontWeight: 700, lineHeight: 1.25 }}
+            >
+              {displayName}
+            </Typography>
+            {accountDetail && <Typography
+              noWrap
+              title={accountDetail}
+              sx={{ color: 'text.secondary', fontSize: 11.5, lineHeight: 1.35, mt: 0.15 }}
+            >
+              {accountDetail}
+            </Typography>}
+          </Box>
+        </Stack>
+        <Stack direction="row" sx={{ alignItems: 'center', justifyContent: 'space-between', minHeight: 30, px: 1 }}>
+          <Button
+            aria-label={`Sign out ${displayName}`}
+            disabled={signOutState === 'pending'}
+            onClick={() => void signOut()}
+            size="small"
+            sx={{
+              color: signOutState === 'error' ? 'error.main' : 'text.secondary',
+              fontSize: 12,
+              justifyContent: 'flex-start',
+              minWidth: 0,
+              px: 0,
+              '&:hover': { bgcolor: 'transparent', color: 'text.primary' },
+            }}
+            variant="text"
+          >
+            {signOutState === 'pending' && <CircularProgress color="inherit" size={12} sx={{ mr: 0.75 }} />}
+            {signOutState === 'error' ? 'Try sign out again' : signOutState === 'pending' ? 'Signing out' : 'Sign out'}
+          </Button>
+          {appVersion.status === 'loading'
+            ? <Skeleton aria-label="Loading app version" width={54} />
+            : <Typography
+                title={appVersion.status === 'ready' ? `Marquee ${appVersion.version}` : 'App version unavailable'}
+                sx={{
+                  color: appVersion.status === 'error' ? 'error.main' : 'text.secondary',
+                  fontSize: 11,
+                  lineHeight: 1.2,
+                  maxWidth: 104,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {appVersion.status === 'ready' ? `v${appVersion.version}` : 'Version unavailable'}
+              </Typography>}
+        </Stack>
+      </Box>
     </Stack>
   );
 }
 
 function AppShell({ children }: { children: ReactNode }) {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [appVersion, setAppVersion] = useState<AppVersionState>({ status: 'loading' });
+  useEffect(() => {
+    let active = true;
+    fetchAppVersion()
+      .then(version => {
+        if (active) setAppVersion({ status: 'ready', version });
+      })
+      .catch(() => {
+        if (active) setAppVersion({ status: 'error' });
+      });
+    return () => { active = false; };
+  }, []);
   return (
     <Box sx={{ display: 'flex', minHeight: '100vh' }}>
       <Drawer
@@ -99,7 +227,7 @@ function AppShell({ children }: { children: ReactNode }) {
           },
         }}
       >
-        <SidebarContent />
+        <SidebarContent appVersion={appVersion} />
       </Drawer>
       <Drawer
         variant="temporary"
@@ -118,7 +246,7 @@ function AppShell({ children }: { children: ReactNode }) {
           },
         }}
       >
-        <SidebarContent onNavigate={() => setMobileOpen(false)} />
+        <SidebarContent appVersion={appVersion} onNavigate={() => setMobileOpen(false)} />
       </Drawer>
       <IconButton
         aria-label="Open navigation"

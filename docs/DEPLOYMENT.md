@@ -21,6 +21,10 @@ App. The Web App managed identity needs permission to pull the same ACR
 repository. The workflow does not create these resources or assignments.
 
 The existing App Service must expose port 3001 and persist `/home/data`.
+On worker replacement, startup reclaims a persisted instance lock only after
+the durable SQLite owner lease has expired. A live lease continues to fence
+overlapping workers. Restore stays fail-closed on any lifetime lock; operators
+must fence the service and remove a confirmed-stale lock before restoring.
 
 ## App Service settings
 

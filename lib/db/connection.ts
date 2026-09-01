@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import Database from 'better-sqlite3'
@@ -9,7 +9,7 @@ import {
   acquireAuthorityTransitionLock,
   acquireInstanceLifetimeLock,
   canonicalAuthorityPath,
-  type AuthorityTransitionLock,
+  type InstanceLifetimeLock,
 } from './authorityTransitionLock.js'
 
 export interface DatabaseHandle {
@@ -23,14 +23,68 @@ export interface DatabaseHandle {
   close(): void
 }
 
+const collectCleanupErrors = (actions: Array<() => void>) => {
+  const errors: unknown[] = []
+  for (const action of actions) {
+    try {
+      action()
+    } catch (error) {
+      errors.push(error)
+    }
+  }
+  return errors
+}
+
+const throwWithCleanupErrors = (primary: unknown, cleanupErrors: unknown[]): never => {
+  if (!cleanupErrors.length) throw primary
+  throw new AggregateError(
+    [primary, ...cleanupErrors],
+    primary instanceof Error ? primary.message : 'Database startup failed',
+  )
+}
+
+function databaseInstanceLeaseIsInactive(databasePath: string) {
+  if (!existsSync(databasePath)) return true
+  const inspection = new Database(databasePath, {
+    readonly: true,
+    fileMustExist: true,
+  })
+  try {
+    inspection.pragma(`busy_timeout = ${config.sqliteBusyTimeoutMs}`)
+    const hasLeaseTable = inspection.prepare(`
+      SELECT 1 FROM sqlite_master
+      WHERE type = 'table' AND name = 'runtime_instance_lease'
+    `).get()
+    if (!hasLeaseTable) return true
+    const lease = inspection.prepare(`
+      SELECT expires_at FROM runtime_instance_lease WHERE id = 1
+    `).get() as { expires_at: number } | undefined
+    return !lease || lease.expires_at < Date.now()
+  } finally {
+    inspection.close()
+  }
+}
+
 export function openDatabase(databasePath = config.databasePath): DatabaseHandle {
   mkdirSync(path.dirname(databasePath), { recursive: true })
   const authorityPath = canonicalAuthorityPath(databasePath)
-  const transitionLock = acquireAuthorityTransitionLock(authorityPath)
-  let lifetimeLock: AuthorityTransitionLock | null = null
+  const instanceId = randomUUID()
+  const transitionLock = acquireAuthorityTransitionLock(authorityPath, {
+    ownerId: instanceId,
+    reclaimAfterMs: 30 * 60_000,
+    legacyReclaimAfterMs: 30 * 60_000,
+    canReclaim: () => databaseInstanceLeaseIsInactive(authorityPath),
+  })
+  let transitionReleased = false
+  let lifetimeLock: InstanceLifetimeLock | null = null
   let db: Database.Database | null = null
+  let leaseAcquired = false
   try {
-    lifetimeLock = acquireInstanceLifetimeLock(authorityPath)
+    lifetimeLock = acquireInstanceLifetimeLock(
+      authorityPath,
+      instanceId,
+      () => databaseInstanceLeaseIsInactive(authorityPath),
+    )
     db = new Database(databasePath)
     const opened = db
     const journalMode = String(opened.pragma('journal_mode = DELETE', { simple: true })).toLowerCase()
@@ -41,7 +95,6 @@ export function openDatabase(databasePath = config.databasePath): DatabaseHandle
     opened.pragma(`busy_timeout = ${config.sqliteBusyTimeoutMs}`)
     migrate(opened)
     assertExactMarqueeSchema(opened)
-    const instanceId = randomUUID()
     const leaseDurationMs = 60_000
     const acquireLease = opened.prepare(`
       INSERT INTO runtime_instance_lease(
@@ -58,7 +111,10 @@ export function openDatabase(databasePath = config.databasePath): DatabaseHandle
     if (acquireLease.run(instanceId, now, now, now + leaseDurationMs).changes !== 1) {
       throw new Error('Another Marquee process holds the active SQLite instance lease')
     }
+    leaseAcquired = true
+    lifetimeLock.commitReclamation()
     transitionLock.release()
+    transitionReleased = true
     let leaseHealthy = true
     let leaseLossNotified = false
     const leaseLossListeners = new Set<() => void>()
@@ -86,8 +142,8 @@ export function openDatabase(databasePath = config.databasePath): DatabaseHandle
         const result = opened.prepare(`
           UPDATE runtime_instance_lease
           SET heartbeat_at = ?, expires_at = ?
-          WHERE id = 1 AND owner_id = ?
-        `).run(heartbeatAt, heartbeatAt + leaseDurationMs, instanceId)
+          WHERE id = 1 AND owner_id = ? AND expires_at > ?
+        `).run(heartbeatAt, heartbeatAt + leaseDurationMs, instanceId, heartbeatAt)
         if (result.changes !== 1) markLeaseLost()
       } catch {
         markLeaseLost()
@@ -111,27 +167,34 @@ export function openDatabase(databasePath = config.databasePath): DatabaseHandle
         closed = true
         clearInterval(heartbeat)
         leaseLossListeners.clear()
-        try {
-          opened.prepare(`
+        const cleanupErrors = collectCleanupErrors([
+          () => opened.prepare(`
             DELETE FROM runtime_instance_lease WHERE id = 1 AND owner_id = ?
-          `).run(instanceId)
-        } finally {
-          try {
-            opened.close()
-          } finally {
-            lifetimeLock?.release()
-          }
+          `).run(instanceId),
+          () => opened.close(),
+          () => lifetimeLock?.release(),
+        ])
+        if (cleanupErrors.length === 1) throw cleanupErrors[0]
+        if (cleanupErrors.length > 1) {
+          throw new AggregateError(cleanupErrors, 'Database shutdown cleanup failed')
         }
       },
     }
   } catch (error) {
-    try {
-      db?.close()
-    } finally {
-      lifetimeLock?.release()
-    }
-    throw error
-  } finally {
-    transitionLock.release()
+    const cleanupErrors = collectCleanupErrors([
+      () => {
+        if (leaseAcquired && db) {
+          db.prepare(`
+            DELETE FROM runtime_instance_lease WHERE id = 1 AND owner_id = ?
+          `).run(instanceId)
+        }
+      },
+      () => db?.close(),
+      () => lifetimeLock?.release(),
+      () => {
+        if (!transitionReleased) transitionLock.release()
+      },
+    ])
+    return throwWithCleanupErrors(error, cleanupErrors)
   }
 }

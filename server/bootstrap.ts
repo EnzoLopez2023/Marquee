@@ -17,9 +17,15 @@ const stop = (signal: string) => {
   const timeout = setTimeout(() => process.exit(1), 30_000)
   timeout.unref()
   server.close((error) => {
-    database.close()
+    let databaseCloseFailed = false
+    try {
+      database.close()
+    } catch (closeError) {
+      databaseCloseFailed = true
+      console.error('Marquee database shutdown failed:', closeError)
+    }
     clearTimeout(timeout)
-    process.exitCode = error ? 1 : 0
+    process.exitCode = error || databaseCloseFailed ? 1 : 0
   })
   console.log(`Marquee draining after ${signal}`)
 }
