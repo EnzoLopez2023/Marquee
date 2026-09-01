@@ -23,6 +23,8 @@ jobs:
           cache: npm
 
       - run: npm ci
+      - name: Verify web icon system
+        run: npm run icons:check
       - run: npm run build
 
   deploy:
