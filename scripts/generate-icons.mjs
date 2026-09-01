@@ -53,60 +53,87 @@ async function resizePng(master, size) {
 }
 
 function createFeatherMask(size, feather) {
-  const rgba = Buffer.alloc(size * size * 4)
+  const alpha = Buffer.alloc(size * size)
   for (let y = 0; y < size; y += 1) {
     for (let x = 0; x < size; x += 1) {
       const edgeDistance = Math.min(x, y, size - 1 - x, size - 1 - y)
-      const alpha = Math.round(255 * Math.min(1, edgeDistance / feather))
-      const offset = (y * size + x) * 4
-      rgba[offset] = 255
-      rgba[offset + 1] = 255
-      rgba[offset + 2] = 255
-      rgba[offset + 3] = alpha
+      alpha[y * size + x] = Math.round(255 * Math.min(1, edgeDistance / feather))
     }
   }
-  return rgba
+  return alpha
+}
+
+function interpolateColor(stops, position) {
+  const upperIndex = stops.findIndex(([offset]) => offset >= position)
+  if (upperIndex <= 0) {
+    return stops[0][1]
+  }
+  const [lowerOffset, lowerColor] = stops[upperIndex - 1]
+  const [upperOffset, upperColor] = stops[upperIndex]
+  const progress = (position - lowerOffset) / (upperOffset - lowerOffset)
+  return lowerColor.map((channel, index) => (
+    Math.round(channel + (upperColor[index] - channel) * progress)
+  ))
+}
+
+function createMaskableBackground() {
+  const background = Buffer.alloc(MASKABLE_SIZE * MASKABLE_SIZE * 3)
+  const stops = [
+    [0, [80, 84, 92]],
+    [0.58, [61, 66, 73]],
+    [1, [27, 35, 41]],
+  ]
+  const centerX = MASKABLE_SIZE * 0.48
+  const centerY = MASKABLE_SIZE * 0.45
+  const radius = MASKABLE_SIZE * 0.72
+
+  for (let y = 0; y < MASKABLE_SIZE; y += 1) {
+    for (let x = 0; x < MASKABLE_SIZE; x += 1) {
+      const distance = Math.hypot(x - centerX, y - centerY) / radius
+      const color = interpolateColor(stops, Math.min(1, distance))
+      const offset = (y * MASKABLE_SIZE + x) * 3
+      background[offset] = color[0]
+      background[offset + 1] = color[1]
+      background[offset + 2] = color[2]
+    }
+  }
+  return background
 }
 
 async function createMaskablePng(master) {
-  const mask = await sharp(createFeatherMask(MASKABLE_ARTWORK_SIZE, MASKABLE_FEATHER), {
-    raw: {
-      width: MASKABLE_ARTWORK_SIZE,
-      height: MASKABLE_ARTWORK_SIZE,
-      channels: 4,
-    },
-  }).png(PNG_OPTIONS).toBuffer()
-
-  const artwork = await sharp(master, { failOn: 'error' })
+  const { data: artwork, info } = await sharp(master, { failOn: 'error' })
     .resize(MASKABLE_ARTWORK_SIZE, MASKABLE_ARTWORK_SIZE, {
       fit: 'fill',
       kernel: sharp.kernel.lanczos3,
     })
-    .ensureAlpha()
-    .composite([{ input: mask, blend: 'dest-in' }])
-    .png(PNG_OPTIONS)
-    .toBuffer()
-
-  const background = Buffer.from(`
-    <svg width="${MASKABLE_SIZE}" height="${MASKABLE_SIZE}" xmlns="http://www.w3.org/2000/svg">
-      <defs>
-        <radialGradient id="background" cx="48%" cy="45%" r="72%">
-          <stop offset="0%" stop-color="#50545c"/>
-          <stop offset="58%" stop-color="#3d4249"/>
-          <stop offset="100%" stop-color="#1b2329"/>
-        </radialGradient>
-      </defs>
-      <rect width="100%" height="100%" fill="url(#background)"/>
-    </svg>
-  `)
-
-  return sharp(background, { density: 72 })
-    .composite([{
-      input: artwork,
-      left: MASKABLE_OFFSET,
-      top: MASKABLE_OFFSET,
-    }])
     .removeAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true })
+  assert(info.channels === 3, 'Maskable artwork resize must be RGB')
+
+  const mask = createFeatherMask(MASKABLE_ARTWORK_SIZE, MASKABLE_FEATHER)
+  const output = createMaskableBackground()
+  for (let y = 0; y < MASKABLE_ARTWORK_SIZE; y += 1) {
+    for (let x = 0; x < MASKABLE_ARTWORK_SIZE; x += 1) {
+      const sourcePixel = y * MASKABLE_ARTWORK_SIZE + x
+      const targetPixel = (y + MASKABLE_OFFSET) * MASKABLE_SIZE + x + MASKABLE_OFFSET
+      const alpha = mask[sourcePixel]
+      for (let channel = 0; channel < 3; channel += 1) {
+        const source = artwork[sourcePixel * 3 + channel]
+        const targetOffset = targetPixel * 3 + channel
+        const target = output[targetOffset]
+        output[targetOffset] = Math.round((source * alpha + target * (255 - alpha)) / 255)
+      }
+    }
+  }
+
+  return sharp(output, {
+    raw: {
+      width: MASKABLE_SIZE,
+      height: MASKABLE_SIZE,
+      channels: 3,
+    },
+  })
     .png(PNG_OPTIONS)
     .toBuffer()
 }
