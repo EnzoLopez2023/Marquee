@@ -31,8 +31,11 @@ must fence the service and remove a confirmed-stale lock before restoring.
 | Setting | Value |
 |---|---|
 | `WEBSITES_PORT` | `3001` |
+| `WEBSITES_ENABLE_APP_SERVICE_STORAGE` | `true` |
 | `DB_PATH` | `/home/data/marquee.db` |
 | `MARQUEE_ARTIFACT_ROOT` | `/home/data/marquee-artifacts` |
+| `BACKUP_STORAGE_ACCOUNT_URL` | Marquee-owned private Blob service URL used by off-host recovery |
+| `BACKUP_STORAGE_CONTAINER` | Marquee-owned private backup container |
 | `AZURE_AD_TENANT_ID` | Optional Marquee Entra tenant ID |
 | `AZURE_AD_CLIENT_ID` | Optional combined Marquee SPA/API client ID |
 | `AZURE_AD_AUDIENCE` | Optional client ID or `api://<client-id>` |
@@ -73,5 +76,22 @@ OIDC, builds a run-specific image locally on the GitHub runner, pushes it to the
 existing shared ACR, and configures the existing Web App to run that image. It
 does not modify `/home/data`.
 
-After deployment, the workflow reports `/api/live` and `/api/ready` status.
-Health reporting does not block the completed deployment.
+Before production activation, `deployment-diagnostics-v1` records the dependency
+audit, source and exact-image SBOMs, HIGH/CRITICAL exact-image scan, migration,
+recovery, readiness, and protected-configuration checks. The owner-authorized
+direct build does not produce a signature or attestation, and this repository
+does not own Azure Monitor resources, so those absent prerequisites are recorded
+explicitly rather than treated as passes. Findings and execution failures emit
+warnings; every result, including a skipped prerequisite, appears in the job
+summary and retained evidence. None can stop the image build or activation.
+
+The vendored diagnostics helper and action come byte-for-byte from azure-infra
+commit `f45790e9df7c9fabbc53dd04e6055a59d6f28f39`
+(`d31a00faad5832832bf0b91e96387f5f77645700` and
+`ff7330e29f4f15abe61bf8c4f5520ff5f1674fc4`). JSONL records, the aggregate
+summary, and checker reports are retained for 30 days. Evidence upload is
+best-effort and emits a warning when it fails.
+
+After activation, `/api/live` and `/api/ready` verification remains blocking.
+A failed activation or health verification restores the previously configured
+image and verifies the rollback before the job can complete.

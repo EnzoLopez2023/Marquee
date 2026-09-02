@@ -38,8 +38,46 @@ jobs:
       ACR: acrenzolopez01
       ACR_LOGIN_SERVER: acrenzolopez01.azurecr.io
       IMAGE_REPOSITORY: marquee
+      DIAGNOSTIC_BUILD_ID: ${{ github.run_id }}.${{ github.run_attempt }}
+      DIAGNOSTIC_RECORDS: deployment-diagnostics/records.jsonl
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+          cache: npm
+
+      # deployment-diagnostics-v1 foundation:
+      # https://github.com/EnzoLopez2023/azure-infra/tree/f45790e9df7c9fabbc53dd04e6055a59d6f28f39/deployment-diagnostics
+      - name: Diagnostic - production dependency audit
+        uses: ./.github/actions/deployment-diagnostic
+        with:
+          check-id: source-dependency-audit
+          category: source-audit
+          phase: pre-build
+          report: reports/npm-audit.json
+          report-format: npm-audit-json
+          records: ${{ env.DIAGNOSTIC_RECORDS }}
+          run: |
+            set -euo pipefail
+            mkdir -p reports
+            npm audit --omit=dev --audit-level=high --json > reports/npm-audit.json
+
+      - name: Diagnostic - source dependency SBOM
+        uses: ./.github/actions/deployment-diagnostic
+        with:
+          check-id: source-sbom
+          category: sbom
+          phase: pre-build
+          report: reports/source-sbom.json
+          report-format: cyclonedx-json
+          records: ${{ env.DIAGNOSTIC_RECORDS }}
+          run: |
+            set -euo pipefail
+            mkdir -p reports
+            npm sbom --sbom-format cyclonedx > reports/source-sbom.json
 
       - name: Azure OIDC login
         uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5
@@ -57,7 +95,8 @@ jobs:
         id: image
         run: |
           set -euo pipefail
-          IMAGE="${ACR_LOGIN_SERVER}/${IMAGE_REPOSITORY}:run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          TAG="run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          IMAGE="${ACR_LOGIN_SERVER}/${IMAGE_REPOSITORY}:${TAG}"
           VERSION="$(node -p "require('./package.json').version")+run.${GITHUB_RUN_NUMBER}"
           BUILD_ID="${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}"
           BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -71,8 +110,215 @@ jobs:
             --build-arg "MARQUEE_BUILD_TIME=$BUILD_TIME" \
             --tag "$IMAGE" .
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "build-id=$BUILD_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve exact candidate digest
+        id: digest
+        env:
+          TAG: ${{ steps.image.outputs.tag }}
+        run: |
+          set -euo pipefail
+          DIGEST="$(az acr repository show \
+            --name "$ACR" \
+            --image "${IMAGE_REPOSITORY}:${TAG}" \
+            --query digest \
+            --output tsv)"
+          if [[ ! "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::ACR did not return an immutable candidate digest"
+            exit 1
+          fi
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+          echo "image=${ACR_LOGIN_SERVER}/${IMAGE_REPOSITORY}@${DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "DIAGNOSTIC_CANDIDATE_DIGEST=$DIGEST" >> "$GITHUB_ENV"
+
+      - name: Generate exact-image SBOM
+        id: image-sbom
+        continue-on-error: true
+        uses: anchore/sbom-action@df80a981bc6edbc4e220a492d3cbe9f5547a6e75 # v0.17.9
+        with:
+          image: ${{ steps.digest.outputs.image }}
+          format: spdx-json
+          output-file: reports/image-sbom.json
+
+      - name: Diagnostic - record exact-image SBOM
+        if: always()
+        uses: ./.github/actions/deployment-diagnostic
+        with:
+          check-id: image-sbom
+          category: sbom
+          phase: pre-activation
+          mode: record
+          exit-code: ${{ steps.image-sbom.outcome == 'success' && '0' || '1' }}
+          report: reports/image-sbom.json
+          report-format: spdx-json
+          records: ${{ env.DIAGNOSTIC_RECORDS }}
+
+      - name: Scan exact candidate image
+        id: image-scan
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@18f2510ee396bbf400402947b394f2dd8c87dbb0 # v0.29.0
+        with:
+          image-ref: ${{ steps.digest.outputs.image }}
+          format: json
+          output: reports/trivy.json
+          severity: HIGH,CRITICAL
+          exit-code: '0'
+
+      - name: Diagnostic - record image vulnerability scan
+        if: always()
+        uses: ./.github/actions/deployment-diagnostic
+        with:
+          check-id: image-vulnerability-scan
+          category: image-scan
+          phase: pre-activation
+          mode: record
+          exit-code: ${{ steps.image-scan.outcome == 'success' && '0' || '1' }}
+          report: reports/trivy.json
+          report-format: trivy-json
+          records: ${{ env.DIAGNOSTIC_RECORDS }}
+
+      - name: Diagnostic - signature verification prerequisite
+        uses: ./.github/actions/deployment-diagnostic
+        with:
+          check-id: signature-verification
+          category: signature-provenance
+          phase: pre-activation
+          mode: skip
+          reason: >-
+            The owner-authorized-direct image build does not sign the candidate,
+            so no candidate signature exists to verify.
+          records: ${{ env.DIAGNOSTIC_RECORDS }}
+
+      - name: Diagnostic - provenance attestation prerequisite
+        uses: ./.github/actions/deployment-diagnostic
+        with:
+          check-id: provenance-attestation-verification
+          category: signature-provenance
+          phase: pre-activation
+          mode: skip
+          reason: >-
+            The existing owner-authorized-direct build disables provenance and
+            image SBOM attestations, so no attached attestation exists to verify.
+          records: ${{ env.DIAGNOSTIC_RECORDS }}
+
+      - name: Diagnostic - migration compatibility
+        env:
+          SITE_URL: https://${{ vars.WEBAPP_NAME }}.azurewebsites.net
+        uses: ./.github/actions/deployment-diagnostic
+        with:
+          check-id: migration-compatibility-precheck
+          category: migration-precondition
+          phase: pre-activation
+          report: reports/migration-check.json
+          report-format: generic-json
+          records: ${{ env.DIAGNOSTIC_RECORDS }}
+          run: |
+            set -euo pipefail
+            npm --silent run deploy:migration-check -- \
+             --site-url "$SITE_URL" \
+             --output reports/migration-check.json
+
+      - name: Diagnostic - recovery precondition
+        env:
+          RESOURCE_GROUP: ${{ vars.RESOURCE_GROUP }}
+          WEBAPP_NAME: ${{ vars.WEBAPP_NAME }}
+        uses: ./.github/actions/deployment-diagnostic
+        with:
+          check-id: recovery-precondition-precheck
+          category: recovery-precondition
+          phase: pre-activation
+          report: reports/recovery-check.json
+          report-format: generic-json
+          evidence: reports/recovery-setting-names.json
+          records: ${{ env.DIAGNOSTIC_RECORDS }}
+          run: |
+            set -euo pipefail
+            mkdir -p reports
+            az webapp config appsettings list \
+             --resource-group "$RESOURCE_GROUP" \
+             --name "$WEBAPP_NAME" \
+             --query "[].name" \
+             --output json > reports/recovery-setting-names.json
+            npm --silent run deploy:recovery-check -- \
+             --settings-file reports/recovery-setting-names.json \
+             --output reports/recovery-check.json
+
+      - name: Diagnostic - pre-activation readiness
+        env:
+          SITE_URL: https://${{ vars.WEBAPP_NAME }}.azurewebsites.net
+        uses: ./.github/actions/deployment-diagnostic
+        with:
+          check-id: readiness-precondition-precheck
+          category: readiness-precondition
+          phase: pre-activation
+          report: reports/readiness-check.json
+          report-format: generic-json
+          records: ${{ env.DIAGNOSTIC_RECORDS }}
+          run: |
+            set -euo pipefail
+            npm --silent run deploy:readiness-check -- \
+             --site-url "$SITE_URL" \
+             --output reports/readiness-check.json
+
+      - name: Diagnostic - monitoring prerequisite
+        uses: ./.github/actions/deployment-diagnostic
+        with:
+          check-id: monitoring-precheck
+          category: monitoring-precheck
+          phase: pre-activation
+          mode: skip
+          reason: >-
+            This repository defines no Azure Monitor alert or availability
+            resources; it deploys to an existing owner-managed Web App.
+          records: ${{ env.DIAGNOSTIC_RECORDS }}
+
+      - name: Diagnostic - protected configuration
+        env:
+          RESOURCE_GROUP: ${{ vars.RESOURCE_GROUP }}
+          WEBAPP_NAME: ${{ vars.WEBAPP_NAME }}
+        uses: ./.github/actions/deployment-diagnostic
+        with:
+          check-id: protected-configuration-precheck
+          category: protected-configuration-precheck
+          phase: pre-activation
+          report: reports/config-fingerprint.json
+          report-format: generic-json
+          evidence: reports/protected-setting-names.json
+          records: ${{ env.DIAGNOSTIC_RECORDS }}
+          run: |
+            set -euo pipefail
+            mkdir -p reports
+            az webapp config appsettings list \
+             --resource-group "$RESOURCE_GROUP" \
+             --name "$WEBAPP_NAME" \
+             --query "[].name" \
+             --output json > reports/protected-setting-names.json
+            npm --silent run deploy:config-fingerprint -- \
+             --settings-file reports/protected-setting-names.json \
+             --output reports/config-fingerprint.json
+
+      - name: Capture prior production image
+        id: prior
+        env:
+          RESOURCE_GROUP: ${{ vars.RESOURCE_GROUP }}
+          WEBAPP_NAME: ${{ vars.WEBAPP_NAME }}
+        run: |
+          set -euo pipefail
+          PRIOR_IMAGE="$(az webapp config container show \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$WEBAPP_NAME" \
+            --query "[?name=='DOCKER_CUSTOM_IMAGE_NAME'].value | [0]" \
+            --output tsv)"
+          PRIOR_IMAGE="${PRIOR_IMAGE#DOCKER|}"
+          if [[ -z "$PRIOR_IMAGE" ]]; then
+            echo "::error::The current production image could not be resolved for rollback"
+            exit 1
+          fi
+          echo "image=$PRIOR_IMAGE" >> "$GITHUB_OUTPUT"
 
       - name: Deploy image
+        id: activation
         env:
           IMAGE: ${{ steps.image.outputs.image }}
           RESOURCE_GROUP: ${{ vars.RESOURCE_GROUP }}
@@ -86,11 +332,11 @@ jobs:
             --container-registry-url "https://${ACR_LOGIN_SERVER}"
           az webapp restart --resource-group "$RESOURCE_GROUP" --name "$WEBAPP_NAME"
 
-      - name: Report health
-        continue-on-error: true
+      - name: Verify activated release health
         env:
           SITE_URL: https://${{ vars.WEBAPP_NAME }}.azurewebsites.net
         run: |
+          set -euo pipefail
           for attempt in $(seq 1 20); do
             if curl --connect-timeout 2 --max-time 5 --fail --silent \
               "$SITE_URL/api/live" >/dev/null \
@@ -101,5 +347,64 @@ jobs:
             fi
             sleep 10
           done
-          echo "::warning::Marquee health endpoints did not become ready"
+          echo "::error::Marquee health endpoints did not become ready"
           exit 1
+
+      - name: Roll back failed activation
+        if: ${{ (failure() || cancelled()) && steps.activation.outcome != 'skipped' }}
+        timeout-minutes: 8
+        env:
+          PRIOR_IMAGE: ${{ steps.prior.outputs.image }}
+          RESOURCE_GROUP: ${{ vars.RESOURCE_GROUP }}
+          SITE_URL: https://${{ vars.WEBAPP_NAME }}.azurewebsites.net
+          WEBAPP_NAME: ${{ vars.WEBAPP_NAME }}
+        run: |
+          set -euo pipefail
+          az webapp config container set \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$WEBAPP_NAME" \
+            --container-image-name "$PRIOR_IMAGE" \
+            --container-registry-url "https://${ACR_LOGIN_SERVER}"
+          az webapp restart --resource-group "$RESOURCE_GROUP" --name "$WEBAPP_NAME"
+          for attempt in $(seq 1 20); do
+            if curl --connect-timeout 2 --max-time 5 --fail --silent \
+              "$SITE_URL/api/live" >/dev/null \
+              && curl --connect-timeout 2 --max-time 5 --fail --silent \
+              "$SITE_URL/api/ready" >/dev/null; then
+              echo "Marquee rollback is live and ready"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::Marquee rollback health verification failed"
+          exit 1
+
+      - name: Aggregate deployment diagnostics
+        if: always()
+        uses: ./.github/actions/deployment-diagnostic
+        with:
+          check-id: aggregate
+          category: nested-checker
+          phase: pre-activation
+          mode: aggregate
+          records: ${{ env.DIAGNOSTIC_RECORDS }}
+
+      - name: Upload diagnostic evidence
+        id: diagnostics-upload
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b # v4.5.0
+        with:
+          name: deployment-diagnostics-${{ env.DIAGNOSTIC_BUILD_ID }}
+          path: |
+            deployment-diagnostics/records.jsonl
+            deployment-diagnostics/records-summary.json
+            reports/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Report diagnostic evidence upload failure
+        if: ${{ always() && steps.diagnostics-upload.outcome != 'success' }}
+        run: >-
+          echo "::warning title=Deployment diagnostics artifact::Diagnostic
+          evidence upload failed; inspect the upload step for the retained error."

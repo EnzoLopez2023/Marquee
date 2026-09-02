@@ -3,6 +3,8 @@ dist/
 dist-server/
 coverage/
 build-metadata.json
+deployment-diagnostics/
+reports/
 .env
 *.db
 *.db-*
