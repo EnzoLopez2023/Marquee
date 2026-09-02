@@ -25,6 +25,8 @@ jobs:
       - run: npm ci
       - name: Verify web icon system
         run: npm run icons:check
+      - name: Verify deployment diagnostics contract
+        run: npm test -- --run test/security/deploymentDiagnostics.test.ts
       - run: npm run build
 
   deploy:
@@ -77,7 +79,7 @@ jobs:
           run: |
             set -euo pipefail
             mkdir -p reports
-            npm sbom --sbom-format cyclonedx > reports/source-sbom.json
+            npm sbom --sbom-format cyclonedx --package-lock-only > reports/source-sbom.json
 
       - name: Azure OIDC login
         uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5

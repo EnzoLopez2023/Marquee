@@ -278,6 +278,12 @@ describe('deployment diagnostics adoption', () => {
     expect(workflow).toContain(
       'f45790e9df7c9fabbc53dd04e6055a59d6f28f39/deployment-diagnostics',
     )
+    expect(workflow).toContain(
+      'npm test -- --run test/security/deploymentDiagnostics.test.ts',
+    )
+    expect(workflow).toContain(
+      'npm sbom --sbom-format cyclonedx --package-lock-only',
+    )
     expect(workflow).toContain('severity: HIGH,CRITICAL')
     expect(workflow).toContain('if: ${{ (failure() || cancelled())')
     expect(workflow.indexOf('Scan exact candidate image')).toBeLessThan(
